@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "devsweep"
+version = "0.1.0"
+description = "Semantic disk audit for iOS/Android dev machines — finds what is provably dead, not just big"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "bonkey" }]
+keywords = ["xcode", "simulator", "android", "gradle", "disk", "cleanup"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.scripts]
+devsweep = "devsweep.cli:entry"
+
+[project.urls]
+Repository = "https://github.com/bonkey/mobile-broom"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/devsweep"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
