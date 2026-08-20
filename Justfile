@@ -23,3 +23,5 @@ release: check
     echo "Releasing v${version}"
     git tag "v${version}"
     git push && git push --tags
+    # mise's pipx backend resolves versions from GitHub RELEASES, not bare tags
+    gh release create "v${version}" --title "v${version}" --generate-notes
