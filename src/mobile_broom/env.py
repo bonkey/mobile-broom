@@ -44,7 +44,7 @@ class Env:
 
     @property
     def images_plist(self) -> Path:
-        root = self.environ.get("DEVSWEEP_IMAGES_PLIST")
+        root = self.environ.get("MOBILE_BROOM_IMAGES_PLIST")
         return Path(root) if root else Path("/Library/Developer/CoreSimulator/Images/images.plist")
 
     @property
@@ -121,7 +121,7 @@ class Env:
                 if SIMCTL_DENIED.search(full):
                     self.simctl_error = (
                         "simctl cannot reach CoreSimulatorService (XPC denied — sandbox?); "
-                        "run devsweep outside the sandbox. Runtimes below come from images.plist; "
+                        "run mobile-broom outside the sandbox. Runtimes below come from images.plist; "
                         "actions are printed, not run"
                     )
                 else:

@@ -92,7 +92,7 @@ class Browser:
             scr,
             0,
             0,
-            f"devsweep — {len(self.findings)} findings · marked {len(marked)} ({human(msize).strip()})",
+            f"mobile-broom — {len(self.findings)} findings · marked {len(marked)} ({human(msize).strip()})",
             curses.A_BOLD,
         )
         _put(scr, 1, 0, HELP, curses.A_DIM)
@@ -261,7 +261,7 @@ class Browser:
 def run(selectors, env, cfg, refresh=False) -> int:
     import sys
 
-    sys.stderr.write("devsweep: collecting…\n")
+    sys.stderr.write("mobile-broom: collecting…\n")
     sizer = Sizer(refresh=refresh)
     findings = engine.collect(selectors, env, cfg, sizer, progress=True)
 
@@ -271,6 +271,6 @@ def run(selectors, env, cfg, refresh=False) -> int:
     try:
         curses.wrapper(main)
     except curses.error:
-        print("devsweep: TUI needs an interactive terminal", file=sys.stderr)
+        print("mobile-broom: TUI needs an interactive terminal", file=sys.stderr)
         return 2
     return 0

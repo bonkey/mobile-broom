@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from devsweep.config import Config
-from devsweep.env import Env
+from mobile_broom.config import Config
+from mobile_broom.env import Env
 
 NOW = datetime.now(UTC)
 
@@ -52,9 +52,9 @@ def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
     h.mkdir()
     monkeypatch.setenv("HOME", str(h))
-    monkeypatch.setenv("DEVSWEEP_CONFIG_DIR", str(tmp_path / "cfg"))
-    monkeypatch.setenv("DEVSWEEP_TRASH", str(tmp_path / "trash"))
-    monkeypatch.setenv("DEVSWEEP_IMAGES_PLIST", str(tmp_path / "images.plist"))
+    monkeypatch.setenv("MOBILE_BROOM_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
+    monkeypatch.setenv("MOBILE_BROOM_IMAGES_PLIST", str(tmp_path / "images.plist"))
     return h
 
 
@@ -63,7 +63,7 @@ def env(home, tmp_path):
     e = FakeEnv(
         home,
         environ={
-            "DEVSWEEP_IMAGES_PLIST": str(tmp_path / "images.plist"),
+            "MOBILE_BROOM_IMAGES_PLIST": str(tmp_path / "images.plist"),
             "ANDROID_HOME": str(home / "Library/Android/sdk"),
         },
     )

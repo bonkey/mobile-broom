@@ -6,7 +6,7 @@ import sys
 import pytest
 from conftest import days_ago, mkfile
 
-from devsweep import cli
+from mobile_broom import cli
 
 
 def test_rewrite_argv_group_shorthand():

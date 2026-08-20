@@ -2,8 +2,8 @@ import io
 
 from conftest import mkfile
 
-from devsweep import actions
-from devsweep.model import Action, Finding
+from mobile_broom import actions
+from mobile_broom.model import Action, Finding
 
 
 def f(label, action, size=1, verdict="dead"):
@@ -20,7 +20,7 @@ def f(label, action, size=1, verdict="dead"):
 
 
 def test_trash_moves_and_handles_collisions(tmp_path, monkeypatch):
-    monkeypatch.setenv("DEVSWEEP_TRASH", str(tmp_path / "trash"))
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
     a = mkfile(tmp_path / "x" / "thing" / "f", size=10).parent
     b = mkfile(tmp_path / "y" / "thing" / "f", size=10).parent
     assert actions.trash(str(a)).startswith("→ ")
@@ -32,7 +32,7 @@ def test_trash_moves_and_handles_collisions(tmp_path, monkeypatch):
 
 
 def test_trash_purge_deletes(tmp_path, monkeypatch):
-    monkeypatch.setenv("DEVSWEEP_TRASH", str(tmp_path / "trash"))
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
     a = mkfile(tmp_path / "x" / "f", size=10).parent
     assert actions.trash(str(a), purge=True) == "deleted"
     assert not a.exists() and not (tmp_path / "trash").exists()
@@ -88,7 +88,7 @@ def test_dry_run_runs_only_dry_run_argv(tmp_path):
 
 
 def test_execute_runs_argv_and_trashes(tmp_path, monkeypatch):
-    monkeypatch.setenv("DEVSWEEP_TRASH", str(tmp_path / "trash"))
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
     calls = []
 
     class R:

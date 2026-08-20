@@ -1,4 +1,4 @@
-from devsweep.finders._util import build_key, file_url_path, version_tuple, when
+from mobile_broom.finders._util import build_key, file_url_path, version_tuple, when
 
 
 def test_build_key_orders_apple_builds():

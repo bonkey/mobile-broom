@@ -2,8 +2,8 @@ import plistlib
 
 from conftest import days_ago, mkfile, simctl_devices_json, write_images_plist
 
-from devsweep.finders import run as run_finders
-from devsweep.finders.ios import runtime_name
+from mobile_broom.finders import run as run_finders
+from mobile_broom.finders.ios import runtime_name
 
 
 def by_label(findings):

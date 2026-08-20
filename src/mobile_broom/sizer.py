@@ -1,7 +1,7 @@
 """Sizing with the three rules that keep numbers honest:
 1. never cross a mountpoint (st_dev must match the root) — cryptex volumes are mounts, not files
 2. each candidate sized on its own; totals are 'candidates', not 'reclaimable' (APFS clones overlap)
-3. cache by (path, mtime) in ~/.config/devsweep/sizes.json; --refresh bypasses
+3. cache by (path, mtime) in ~/.config/mobile-broom/sizes.json; --refresh bypasses
 """
 
 from __future__ import annotations

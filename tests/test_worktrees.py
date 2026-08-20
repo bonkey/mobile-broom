@@ -3,7 +3,7 @@ import subprocess
 
 from conftest import days_ago, mkfile
 
-from devsweep.finders import run as run_finders
+from mobile_broom.finders import run as run_finders
 
 
 def git(cwd, *args):

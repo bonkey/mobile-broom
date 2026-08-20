@@ -3,8 +3,8 @@ import time
 
 from conftest import mkfile
 
-from devsweep.finders import run as run_finders
-from devsweep.finders.android import WRAPPER_VER
+from mobile_broom.finders import run as run_finders
+from mobile_broom.finders.android import WRAPPER_VER
 
 
 def by_label(findings):

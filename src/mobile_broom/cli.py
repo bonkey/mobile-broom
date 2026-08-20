@@ -1,12 +1,12 @@
-"""devsweep — semantic disk audit for iOS/Android dev machines.
+"""mobile-broom — semantic disk audit for iOS/Android dev machines.
 
-  devsweep                     interactive browser (tty) / full audit (pipe)
-  devsweep audit [ios|android|worktrees|general|<category>...] [--json]
-  devsweep ios                 shorthand for `audit ios`
-  devsweep clean ios           act on the dead findings in a group, with confirm
-  devsweep clean derived-data --dry-run
-  devsweep clean android --yes --stale
-  devsweep audit --json | jq
+  mobile-broom                     interactive browser (tty) / full audit (pipe)
+  mobile-broom audit [ios|android|worktrees|general|<category>...] [--json]
+  mobile-broom ios                 shorthand for `audit ios`
+  mobile-broom clean ios           act on the dead findings in a group, with confirm
+  mobile-broom clean derived-data --dry-run
+  mobile-broom clean android --yes --stale
+  mobile-broom audit --json | jq
 
 Verdicts: dead (provably unreferenced/superseded) · stale (idle past threshold)
           · shared (no owner; safe to drop, costs a rebuild) · review (facts only)
@@ -31,7 +31,7 @@ from .sizer import Sizer
 
 
 def die(msg: str, code: int = 2):
-    print(f"devsweep: {msg}", file=sys.stderr)
+    print(f"mobile-broom: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
@@ -47,9 +47,9 @@ def _selectors(values: list[str]) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="devsweep", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="mobile-broom", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--version", action="version", version=f"devsweep {__version__}")
+    ap.add_argument("--version", action="version", version=f"mobile-broom {__version__}")
     sub = ap.add_subparsers(dest="cmd")
 
     a = sub.add_parser("audit", help="report findings (default when piped)")
@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def rewrite_argv(argv: list[str]) -> list[str]:
-    """`devsweep ios` → `devsweep audit ios`; flags-only → tui/audit decided later."""
+    """`mobile-broom ios` → `mobile-broom audit ios`; flags-only → tui/audit decided later."""
     if argv and (argv[0] in GROUPS or argv[0] in CATEGORY_GROUP):
         return ["audit", *argv]
     return argv

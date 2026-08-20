@@ -1,4 +1,4 @@
-# devsweep
+# mobile-broom
 
 Semantic disk audit for iOS/Android dev machines. Answers *"what here is provably dead"*
 from metadata — `lastUsedAt`, dangling back-references, version strings nothing points at —
@@ -6,7 +6,7 @@ not from size. Report by default; official CLIs (`simctl`, `avdmanager`, `sdkman
 do the deleting; user paths go to `~/.Trash`; never `sudo`.
 
 ```
-$ devsweep ios
+$ mobile-broom ios
 ios
   runtimes  (4, 32.9G)
     dead     8.4G  iOS 27.0 (24A5370g)  — superseded by 24A5408d; last used 2026-07-22 (27d)
@@ -26,30 +26,31 @@ Python ≥ 3.11, standard library only.
 
 ```sh
 # run without installing (always the latest commit)
-uvx --from git+https://github.com/bonkey/mobile-broom devsweep
+uvx --from git+https://github.com/bonkey/mobile-broom mobile-broom
 
-# install as a tool
+# install as a tool (commands: mobile-broom, mbroom)
 uv tool install git+https://github.com/bonkey/mobile-broom
-uv tool upgrade devsweep
+uv tool upgrade mobile-broom
 
-# mise (uses the pipx backend; works with `pipx.uvx = true`)
-mise use -g "pipx:git+https://github.com/bonkey/mobile-broom"
+# mise (pipx backend, GitHub shorthand — resolves versions from git tags,
+# so the repo must have a v* tag; plain git+https URLs don't resolve @latest)
+mise use -g "pipx:bonkey/mobile-broom"
 ```
 
 ## Use
 
 ```
-devsweep                          # TUI on a tty; full audit when piped
-devsweep audit                    # every group
-devsweep audit ios                # one group (ios · android · worktrees · general)
-devsweep ios                      # shorthand for `audit ios`
-devsweep audit runtimes avd       # individual categories
-devsweep audit --json | jq        # one record per finding
-devsweep clean ios --dry-run      # print intended actions, touch nothing
-devsweep clean derived-data       # act on dead findings, with confirm
-devsweep clean android --yes      # skip confirm (scripts)
-devsweep clean ios --stale        # also act on stale; --shared for shared caches; --purge = no Trash
-devsweep config --edit            # ~/.config/devsweep/config.json
+mobile-broom                          # TUI on a tty; full audit when piped
+mobile-broom audit                    # every group
+mobile-broom audit ios                # one group (ios · android · worktrees · general)
+mobile-broom ios                      # shorthand for `audit ios`
+mobile-broom audit runtimes avd       # individual categories
+mobile-broom audit --json | jq        # one record per finding
+mobile-broom clean ios --dry-run      # print intended actions, touch nothing
+mobile-broom clean derived-data       # act on dead findings, with confirm
+mobile-broom clean android --yes      # skip confirm (scripts)
+mobile-broom clean ios --stale        # also act on stale; --shared for shared caches; --purge = no Trash
+mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 ```
 
 TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · space mark · `a` mark all dead in
@@ -96,11 +97,11 @@ clones can overlap and the sum is not a reclaim promise.
 - Trash, not delete (`--purge` opts out).
 - Booted simulators, their runtimes, dirty worktrees and `protected` globs from config are never acted on.
 - `--dry-run` on every `clean`; for runtimes it runs `simctl runtime delete --dry-run` and shows simctl's own answer.
-- `simctl` needs an unsandboxed process (XPC to CoreSimulatorService). When blocked, devsweep says so and still reports runtimes from `images.plist`, with the commands printed for you to run.
+- `simctl` needs an unsandboxed process (XPC to CoreSimulatorService). When blocked, mobile-broom says so and still reports runtimes from `images.plist`, with the commands printed for you to run.
 
 ## Config
 
-`~/.config/devsweep/config.json` (created on first run):
+`~/.config/mobile-broom/config.json` (created on first run):
 
 ```json
 {
@@ -111,7 +112,7 @@ clones can overlap and the sum is not a reclaim promise.
 }
 ```
 
-Sizes are cached in `~/.config/devsweep/sizes.json` keyed by path + mtime; `--refresh` bypasses.
+Sizes are cached in `~/.config/mobile-broom/sizes.json` keyed by path + mtime; `--refresh` bypasses.
 
 ## Develop
 
@@ -119,7 +120,7 @@ Sizes are cached in `~/.config/devsweep/sizes.json` keyed by path + mtime; `--re
 uv sync
 just test        # pytest — finders run against fixture trees, no real simctl needed
 just fmt
-uv run devsweep audit ios
+uv run mobile-broom audit ios
 ```
 
 ## Out of scope

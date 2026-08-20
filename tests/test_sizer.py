@@ -2,7 +2,7 @@ import os
 
 from conftest import mkfile
 
-from devsweep.sizer import Sizer, human, walk_size
+from mobile_broom.sizer import Sizer, human, walk_size
 
 
 def test_walk_size_counts_allocated_bytes_and_skips_symlinks(tmp_path):

@@ -1,4 +1,4 @@
-"""~/.config/devsweep/config.json — created on first run, merged over defaults."""
+"""~/.config/mobile-broom/config.json — created on first run, merged over defaults."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class Config:
 
 
 def config_dir() -> Path:
-    return Path(os.environ.get("DEVSWEEP_CONFIG_DIR") or Path.home() / ".config" / "devsweep")
+    return Path(os.environ.get("MOBILE_BROOM_CONFIG_DIR") or Path.home() / ".config" / "mobile-broom")
 
 
 def config_path() -> Path:
@@ -53,7 +53,7 @@ def load(create: bool = True) -> Config:
         try:
             data.update(json.loads(p.read_text()))
         except json.JSONDecodeError as e:
-            raise SystemExit(f"devsweep: bad config {p}: {e}")
+            raise SystemExit(f"mobile-broom: bad config {p}: {e}")
     elif create:
         try:
             p.parent.mkdir(parents=True, exist_ok=True)

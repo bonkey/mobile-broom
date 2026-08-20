@@ -23,7 +23,7 @@ class Result:
 
 
 def trash_dir() -> Path:
-    return Path(os.environ.get("DEVSWEEP_TRASH") or Path.home() / ".Trash")
+    return Path(os.environ.get("MOBILE_BROOM_TRASH") or Path.home() / ".Trash")
 
 
 def trash(path: str, purge: bool = False) -> str:

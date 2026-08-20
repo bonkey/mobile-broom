@@ -151,7 +151,7 @@ def find_orphan_derived_data(env, cfg):
             group="worktrees",
             label=f"{guess} → {name}",
             paths=[str(dd / name)],
-            evidence=f"WorkspacePath gone: {ws}; last accessed {when(d.get('LastAccessedDate'))}; act via `devsweep clean derived-data`",
+            evidence=f"WorkspacePath gone: {ws}; last accessed {when(d.get('LastAccessedDate'))}; act via `mobile-broom clean derived-data`",
             verdict="review",
             action=None,
             extra={"workspace": ws, "derived_data": name},

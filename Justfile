@@ -1,4 +1,4 @@
-# devsweep tasks
+# mobile-broom tasks
 
 # Run tests
 test:
@@ -11,7 +11,7 @@ fmt:
 
 # Run the tool from source
 run *ARGS:
-    uv run devsweep {{ARGS}}
+    uv run mobile-broom {{ARGS}}
 
 # Format + test
 check: fmt test
