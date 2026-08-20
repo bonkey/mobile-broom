@@ -157,7 +157,7 @@ def find_jetbrains(env, cfg):
                 else:
                     verdict = "stale" if kind != "config" else "review"
                     ev = f"{ide} {kind} for an older IDE build; newest is {newest}"
-                    action = Action(kind="trash", path=str(path)) if kind != "config" else None
+                    action = Action(kind="remove", path=str(path)) if kind != "config" else None
                 yield Finding(
                     category="jetbrains",
                     group="general",

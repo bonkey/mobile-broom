@@ -11,7 +11,8 @@
 Verdicts: dead (provably unreferenced/superseded) · stale (idle past threshold)
           · shared (no owner; safe to drop, costs a rebuild) · review (facts only)
 `clean` acts on dead; add --stale / --shared to widen. review is never acted on
-outside the TUI. User paths go to ~/.Trash unless --purge. No sudo, ever.
+outside the TUI. Paths are deleted; --trash moves them to ~/.Trash instead.
+Official CLIs do the deleting where one exists. No sudo, ever.
 """
 
 from __future__ import annotations
@@ -47,7 +48,9 @@ def _selectors(values: list[str]) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="mobile-broom", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="mobile-broom",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--version", action="version", version=f"mobile-broom {__version__}")
     sub = ap.add_subparsers(dest="cmd")
@@ -67,7 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--yes", "-y", action="store_true", help="skip confirmation")
     c.add_argument("--stale", action="store_true", help="also act on stale findings")
     c.add_argument("--shared", action="store_true", help="also act on shared caches")
-    c.add_argument("--purge", action="store_true", help="delete instead of moving to ~/.Trash")
+    c.add_argument(
+        "--trash", action="store_true", help="move paths to ~/.Trash instead of deleting"
+    )
     c.add_argument("--refresh", action="store_true", help="ignore the size cache")
 
     t = sub.add_parser("tui", help="interactive browser")
@@ -116,18 +121,18 @@ def cmd_clean(args, env: Env, cfg: Config) -> int:
     actions.describe_plan(steps)
     if args.dry_run:
         print("\nwould:")
-        actions.execute(todo, dry_run=True, purge=args.purge)
+        actions.execute(todo, dry_run=True, trash=args.trash)
         return 0
     if not args.yes:
         if not sys.stdin.isatty():
             die("refusing to act without a tty; pass --yes", 1)
-        verb = "DELETE (purge)" if args.purge else "trash/run"
+        verb = "move to ~/.Trash / run" if args.trash else "DELETE / run"
         ans = input(f"\n{verb} {len(steps)} action(s)? [y/N] ").strip().lower()
         if ans not in ("y", "yes"):
             print("aborted")
             return 1
     print()
-    results = actions.execute(todo, dry_run=False, purge=args.purge)
+    results = actions.execute(todo, dry_run=False, trash=args.trash)
     failed = [r for r in results if not r.ok and r.note != "manual"]
     manual = [r for r in results if r.note == "manual"]
     print(

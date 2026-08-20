@@ -39,7 +39,7 @@ def test_audit_json_is_valid(env, cfg, home, capsys, monkeypatch):
     assert isinstance(data, list) and len(data) == 2
     rec = {d["label"]: d for d in data}
     assert rec["Gone-xyz"]["verdict"] == "dead"
-    assert rec["Gone-xyz"]["action_kind"] == "trash"
+    assert rec["Gone-xyz"]["action_kind"] == "remove"
     assert isinstance(rec["Gone-xyz"]["size"], int) and rec["Gone-xyz"]["size"] > 0
     assert set(rec["Gone-xyz"]) >= {
         "category",
@@ -84,13 +84,21 @@ def test_clean_dry_run_touches_nothing(env, cfg, home, capsys):
     assert sorted(p.name for p in dd.iterdir()) == before
 
 
-def test_clean_yes_trashes_dead_only(env, cfg, home, tmp_path, capsys):
+def test_clean_yes_deletes_dead_only(env, cfg, home, tmp_path, capsys):
     dd = seed_derived_data(home)
     rc = cli.main(["clean", "derived-data", "derived-data-shared", "--yes"], env=env)
     out = capsys.readouterr().out
     assert rc == 0, out
     assert not (dd / "Gone-xyz").exists()
     assert (dd / "ModuleCache.noindex").exists()  # shared needs --shared
+    assert not (tmp_path / "trash").exists()  # deleted, not trashed
+
+
+def test_clean_trash_flag_moves_to_trash(env, cfg, home, tmp_path, capsys):
+    dd = seed_derived_data(home)
+    rc = cli.main(["clean", "derived-data", "--yes", "--trash"], env=env)
+    assert rc == 0
+    assert not (dd / "Gone-xyz").exists()
     assert (tmp_path / "trash" / "Gone-xyz").exists()
 
 

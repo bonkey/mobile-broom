@@ -150,17 +150,17 @@ class Browser:
                 scr,
                 0,
                 0,
-                f"about to run {len(steps)} action(s) — y confirm · p purge (no trash) · any other key back",
+                f"about to run {len(steps)} action(s) — y delete · t move to ~/.Trash instead · any other key back",
                 curses.A_BOLD,
             )
             for i, ln in enumerate(lines[: h - 3]):
                 _put(scr, 2 + i, 0, ln)
             scr.refresh()
             k = scr.getch()
-            if k in (ord("y"), ord("Y"), ord("p"), ord("P")):
-                purge = k in (ord("p"), ord("P"))
+            if k in (ord("y"), ord("Y"), ord("t"), ord("T")):
+                trash = k in (ord("t"), ord("T"))
                 out = io.StringIO()
-                results = actions.execute(marked, dry_run=False, purge=purge, out=out)
+                results = actions.execute(marked, dry_run=False, trash=trash, out=out)
                 done = {r.finding.key for r in results if r.ok}
                 self.findings = [f for f in self.findings if f.key not in done]
                 self.marked -= done

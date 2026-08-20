@@ -1,8 +1,10 @@
-"""Acting on findings. Official CLIs first, trash not delete, never sudo, dry-run everywhere."""
+"""Acting on findings. Official CLIs first, real delete by default (--trash moves to
+~/.Trash instead), never sudo, dry-run everywhere. Manual commands are shell-quoted."""
 
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,11 +28,11 @@ def trash_dir() -> Path:
     return Path(os.environ.get("MOBILE_BROOM_TRASH") or Path.home() / ".Trash")
 
 
-def trash(path: str, purge: bool = False) -> str:
+def remove(path: str, trash: bool = False) -> str:
     p = Path(path)
     if not p.exists() and not p.is_symlink():
         return "already gone"
-    if purge:
+    if not trash:
         if p.is_dir() and not p.is_symlink():
             shutil.rmtree(p)
         else:
@@ -53,8 +55,8 @@ def trash(path: str, purge: bool = False) -> str:
 
 
 def effective(action: Action) -> Action:
-    """Downgrade a trash action on a root-owned path to a printed command."""
-    if action.kind == "trash" and action.path and is_root_owned(action.path):
+    """Downgrade a remove action on a root-owned path to a printed command."""
+    if action.kind == "remove" and action.path and is_root_owned(action.path):
         return Action(kind="print", argv=["sudo", "rm", "-rf", action.path])
     return action
 
@@ -66,7 +68,7 @@ def plan(findings: list[Finding]) -> list[tuple[Action, list[Finding]]]:
         if not f.action:
             continue
         a = effective(f.action)
-        key = (a.kind, tuple(a.argv or []), a.path)
+        key = (a.kind, tuple(a.argv or []), a.path, tuple(a.extra_paths or []))
         if key in seen:
             seen[key][1].append(f)
         else:
@@ -86,7 +88,7 @@ def describe_plan(steps, out=None) -> None:
 
 
 def execute(
-    findings: list[Finding], dry_run: bool = False, purge: bool = False, out=None, runner=None
+    findings: list[Finding], dry_run: bool = False, trash: bool = False, out=None, runner=None
 ) -> list[Result]:
     out = out or sys.stdout
     runner = runner or (
@@ -95,7 +97,7 @@ def execute(
     results: list[Result] = []
     for a, fs in plan(findings):
         if a.kind == "print":
-            out.write(f"  manual  {' '.join(a.argv or [])}   (no safe actor; run yourself)\n")
+            out.write(f"  manual  {shlex.join(a.argv or [])}   (no safe actor; run yourself)\n")
             results.extend(Result(f, False, "manual") for f in fs)
             continue
         if dry_run:
@@ -103,13 +105,16 @@ def execute(
                 r = runner(a.dry_run_argv)
                 tail = (r.stdout or r.stderr or "").strip().splitlines()
                 out.write(f"  would   {a.describe()}" + (f"  ⇒ {tail[-1]}" if tail else "") + "\n")
+            elif a.kind == "remove" and trash:
+                out.write(f"  would   trash {a.path}\n")
             else:
                 out.write(f"  would   {a.describe()}\n")
             results.extend(Result(f, True, "dry-run") for f in fs)
             continue
         try:
-            if a.kind == "trash":
-                note = trash(a.path, purge=purge)
+            if a.kind == "remove":
+                notes = [remove(pp, trash=trash) for pp in [a.path, *(a.extra_paths or [])]]
+                note = "; ".join(notes)
                 ok = True
             else:
                 r = runner(a.argv)

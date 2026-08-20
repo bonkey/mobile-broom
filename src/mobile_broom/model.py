@@ -40,21 +40,25 @@ CATEGORY_GROUP = {c: g for g, cs in GROUPS.items() for c in cs}
 class Action:
     """What `clean` does for a finding.
 
-    kind: "argv"  run a command (official CLI first: simctl, avdmanager, sdkmanager, mise)
-          "trash" move a user-owned path to ~/.Trash (or rm -rf with --purge)
-          "print" no safe actor available (root-owned, no CLI): print the command and stop
+    kind: "argv"   run a command (official CLI first: simctl, avdmanager, sdkmanager, mise)
+          "remove" delete a user-owned path (moved to ~/.Trash instead with --trash)
+          "print"  no safe actor available (root-owned, no CLI): print the command and stop
     """
 
     kind: str
     argv: list[str] | None = None
     path: str | None = None
     dry_run_argv: list[str] | None = None
+    extra_paths: list[str] | None = None
 
     def describe(self) -> str:
-        if self.kind == "trash":
-            return f"trash {self.path}"
+        if self.kind == "remove":
+            more = f" (+{len(self.extra_paths)} more)" if self.extra_paths else ""
+            return f"delete {self.path}{more}"
         if self.kind == "print":
-            return "manual: " + " ".join(self.argv or [])
+            import shlex
+
+            return "manual: " + shlex.join(self.argv or [])
         return " ".join(self.argv or [])
 
 

@@ -39,7 +39,9 @@ class Config:
 
 
 def config_dir() -> Path:
-    return Path(os.environ.get("MOBILE_BROOM_CONFIG_DIR") or Path.home() / ".config" / "mobile-broom")
+    return Path(
+        os.environ.get("MOBILE_BROOM_CONFIG_DIR") or Path.home() / ".config" / "mobile-broom"
+    )
 
 
 def config_path() -> Path:

@@ -66,10 +66,12 @@ def avds(env) -> list[dict]:
     return out
 
 
-def _avd_action(env, name: str) -> Action:
+def _avd_action(env, avd: dict) -> Action:
     tool = env.which("avdmanager")
-    argv = [tool or "avdmanager", "delete", "avd", "-n", name]
-    return Action(kind="argv" if tool else "print", argv=argv)
+    if tool:
+        return Action(kind="argv", argv=[tool, "delete", "avd", "-n", avd["name"]])
+    # No avdmanager installed: deleting the .avd dir + .ini is exactly what it would do.
+    return Action(kind="remove", path=str(avd["dir"]), extra_paths=[str(avd["ini"])])
 
 
 @register("avd")
@@ -98,7 +100,7 @@ def find_avd(env, cfg):
             paths=[str(a["dir"])],
             evidence="; ".join(bits),
             verdict=verdict,
-            action=_avd_action(env, a["name"]),
+            action=_avd_action(env, a),
             extra={
                 "name": a["name"],
                 "sysdir": a["sysdir"],
@@ -123,7 +125,7 @@ def find_avd_snapshots(env, cfg):
             paths=[str(snap)],
             evidence=f"{len(listdir(snap))} snapshot(s); AVD last booted {when(last) if last else 'never'}; drop = cold boot next time",
             verdict=verdict,
-            action=Action(kind="trash", path=str(snap)),
+            action=Action(kind="remove", path=str(snap)),
             extra={"avd": a["name"]},
         )
 
@@ -154,8 +156,12 @@ def find_system_images(env, cfg):
     for key, path in installed_system_images(env):
         used_by = [a["display"] for a in all_avds if a["sysdir"] == key]
         pkg = key.replace("/", ";")
-        argv = [tool or "sdkmanager", "--uninstall", pkg]
-        action = Action(kind="argv" if tool else "print", argv=argv)
+        if tool:
+            action = Action(kind="argv", argv=[tool, "--uninstall", pkg])
+        else:
+            # No sdkmanager (cmdline-tools not installed): the package IS the directory —
+            # its package.xml lives inside, so removing the dir uninstalls it.
+            action = Action(kind="remove", path=str(path))
         if key in referenced:
             verdict = "review"
             evidence = f"used by AVD(s): {', '.join(used_by)}; modified {when(mtime_of(path))}"
@@ -251,7 +257,7 @@ def _version_finding(category, cfg, path: Path, version: str, kind: str):
         paths=[str(path)],
         evidence=evidence,
         verdict=verdict,
-        action=Action(kind="trash", path=str(path)),
+        action=Action(kind="remove", path=str(path)),
         extra={"version": version, "referenced": version in referenced},
     )
 
@@ -275,7 +281,7 @@ def find_gradle_caches(env, cfg):
                 paths=[str(path)],
                 evidence=f"shared dependency/transform cache; modified {when(mtime_of(path))}; re-downloaded on next build",
                 verdict="shared",
-                action=Action(kind="trash", path=str(path)),
+                action=Action(kind="remove", path=str(path)),
             )
 
 
@@ -321,7 +327,7 @@ def find_gradle_jdks(env, cfg):
             paths=[str(path)],
             evidence=evidence,
             verdict=verdict,
-            action=Action(kind="trash", path=str(path)),
+            action=Action(kind="remove", path=str(path)),
             extra={"major": major},
         )
 
@@ -340,5 +346,5 @@ def find_gradle_build_cache(env, cfg):
             paths=[str(path)],
             evidence=f"local build cache; modified {when(mtime_of(path))}; gradle prunes entries > 7d idle itself",
             verdict="shared",
-            action=Action(kind="trash", path=str(path)),
+            action=Action(kind="remove", path=str(path)),
         )

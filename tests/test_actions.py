@@ -19,37 +19,68 @@ def f(label, action, size=1, verdict="dead"):
     )
 
 
-def test_trash_moves_and_handles_collisions(tmp_path, monkeypatch):
+def test_remove_deletes_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
+    a = mkfile(tmp_path / "x" / "f", size=10).parent
+    assert actions.remove(str(a)) == "deleted"
+    assert not a.exists() and not (tmp_path / "trash").exists()
+    assert actions.remove(str(a)) == "already gone"
+
+
+def test_remove_trash_moves_and_handles_collisions(tmp_path, monkeypatch):
     monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
     a = mkfile(tmp_path / "x" / "thing" / "f", size=10).parent
     b = mkfile(tmp_path / "y" / "thing" / "f", size=10).parent
-    assert actions.trash(str(a)).startswith("→ ")
+    assert actions.remove(str(a), trash=True).startswith("→ ")
     assert not a.exists()
-    note = actions.trash(str(b))
+    note = actions.remove(str(b), trash=True)
     assert not b.exists()
     assert len(list((tmp_path / "trash").iterdir())) == 2, note
-    assert actions.trash(str(b)) == "already gone"
-
-
-def test_trash_purge_deletes(tmp_path, monkeypatch):
-    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
-    a = mkfile(tmp_path / "x" / "f", size=10).parent
-    assert actions.trash(str(a), purge=True) == "deleted"
-    assert not a.exists() and not (tmp_path / "trash").exists()
 
 
 def test_plan_dedupes_shared_argv():
     shared = Action(kind="argv", argv=["xcrun", "simctl", "delete", "unavailable"])
-    steps = actions.plan([f("a", shared), f("b", shared), f("c", Action(kind="trash", path="/p"))])
+    steps = actions.plan([f("a", shared), f("b", shared), f("c", Action(kind="remove", path="/p"))])
     assert len(steps) == 2
     assert [len(fs) for _a, fs in steps] == [2, 1]
 
 
-def test_root_owned_trash_becomes_manual(monkeypatch):
+def test_root_owned_remove_becomes_manual_and_is_quoted(monkeypatch):
     monkeypatch.setattr(actions, "is_root_owned", lambda p: True)
     out = io.StringIO()
-    res = actions.execute([f("r", Action(kind="trash", path="/Library/root-thing"))], out=out)
-    assert res[0].note == "manual" and "sudo rm -rf /Library/root-thing" in out.getvalue()
+    res = actions.execute([f("r", Action(kind="remove", path="/Library/has space;semi"))], out=out)
+    assert res[0].note == "manual"
+    assert "sudo rm -rf '/Library/has space;semi'" in out.getvalue()
+
+
+def test_manual_argv_is_shell_quoted():
+    out = io.StringIO()
+    actions.execute(
+        [
+            f(
+                "si",
+                Action(
+                    kind="print",
+                    argv=[
+                        "sdkmanager",
+                        "--uninstall",
+                        "system-images;android-34;google_apis;arm64-v8a",
+                    ],
+                ),
+            )
+        ],
+        out=out,
+    )
+    assert "'system-images;android-34;google_apis;arm64-v8a'" in out.getvalue()
+
+
+def test_remove_extra_paths(tmp_path):
+    d = mkfile(tmp_path / "Pixel.avd" / "config.ini", text="x").parent
+    ini = mkfile(tmp_path / "Pixel.ini", text="x")
+    res = actions.execute(
+        [f("avd", Action(kind="remove", path=str(d), extra_paths=[str(ini)]))], out=io.StringIO()
+    )
+    assert res[0].ok and not d.exists() and not ini.exists()
 
 
 def test_dry_run_runs_only_dry_run_argv(tmp_path):
@@ -75,7 +106,7 @@ def test_dry_run_runs_only_dry_run_argv(tmp_path):
                     dry_run_argv=["xcrun", "simctl", "runtime", "delete", "U", "--dry-run"],
                 ),
             ),
-            f("dd", Action(kind="trash", path=str(victim))),
+            f("dd", Action(kind="remove", path=str(victim))),
         ],
         dry_run=True,
         out=out,
@@ -104,7 +135,7 @@ def test_execute_runs_argv_and_trashes(tmp_path, monkeypatch):
         [
             f("ok", Action(kind="argv", argv=["tool", "go"])),
             f("bad", Action(kind="argv", argv=["tool", "fail"])),
-            f("dd", Action(kind="trash", path=str(victim))),
+            f("dd", Action(kind="remove", path=str(victim))),
         ],
         out=io.StringIO(),
         runner=runner,

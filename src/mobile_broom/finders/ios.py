@@ -255,7 +255,7 @@ def find_device_support(env, cfg):
                     paths=[str(path)],
                     evidence=evidence,
                     verdict=verdict,
-                    action=Action(kind="trash", path=str(path)),
+                    action=Action(kind="remove", path=str(path)),
                     extra={
                         "model": model,
                         "os": m["os"],
@@ -272,7 +272,7 @@ def find_device_support(env, cfg):
                 paths=[str(path)],
                 evidence=f"unparsed name; modified {when(mtime_of(path))}",
                 verdict="review",
-                action=Action(kind="trash", path=str(path)),
+                action=Action(kind="remove", path=str(path)),
             )
 
 
@@ -304,7 +304,7 @@ def find_derived_data(env, cfg):
                 paths=[str(path)],
                 evidence=f"no info.plist/WorkspacePath; modified {when(mtime_of(path))}",
                 verdict="review",
-                action=Action(kind="trash", path=str(path)),
+                action=Action(kind="remove", path=str(path)),
                 extra={"workspace": None},
             )
             continue
@@ -322,7 +322,7 @@ def find_derived_data(env, cfg):
             paths=[str(path)],
             evidence=evidence,
             verdict=verdict,
-            action=Action(kind="trash", path=str(path)),
+            action=Action(kind="remove", path=str(path)),
             extra={"workspace": ws, "last_accessed": str(last) if last else None},
         )
 
@@ -341,7 +341,7 @@ def find_derived_data_shared(env, cfg):
             paths=[str(path)],
             evidence=f"shared cache, no owning project; modified {when(mtime_of(path))}; costs a rebuild",
             verdict="shared",
-            action=Action(kind="trash", path=str(path)),
+            action=Action(kind="remove", path=str(path)),
         )
 
 
@@ -360,7 +360,7 @@ def find_archives(env, cfg):
                 paths=[str(path)],
                 evidence=f"archive from {day}; modified {when(mtime_of(path))}; holds dSYMs — keep if shipped",
                 verdict="review",
-                action=Action(kind="trash", path=str(path)),
+                action=Action(kind="remove", path=str(path)),
             )
 
 
@@ -384,7 +384,7 @@ def find_spm_cache(env, cfg):
             paths=[str(path)],
             evidence=f"{note}; modified {when(mtime_of(path))}",
             verdict=verdict,
-            action=Action(kind="trash", path=str(path)) if verdict == "shared" else None,
+            action=Action(kind="remove", path=str(path)) if verdict == "shared" else None,
         )
 
 
@@ -401,7 +401,7 @@ def find_doc_cache(env, cfg):
             paths=[str(path)],
             evidence=f"Xcode rebuilds on demand; modified {when(mtime_of(path))}",
             verdict="shared",
-            action=Action(kind="trash", path=str(path)),
+            action=Action(kind="remove", path=str(path)),
         )
 
 
@@ -433,7 +433,7 @@ def find_previews(env, cfg):
         else:
             verdict, action, ev = (
                 "shared",
-                Action(kind="trash", path=str(path)),
+                Action(kind="remove", path=str(path)),
                 f"{note}; modified {when(mtime_of(path))}; recreated on next preview",
             )
         yield Finding(

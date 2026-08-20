@@ -218,7 +218,7 @@ def test_device_support_keeps_newest_per_model(env, cfg, home):
     assert fs["iOS iPhone13,3 26.5.2 (23F84)"].verdict == "review"
     assert fs["iOS iPad8,9 26.6 (23G5043d)"].verdict == "review"  # only one for that model, fresh
     assert fs["iOS Weird"].verdict == "review"
-    assert all(f.action.kind == "trash" for f in fs.values())
+    assert all(f.action.kind == "remove" for f in fs.values())
 
 
 def test_derived_data_orphans_and_shared(env, cfg, home):

@@ -51,14 +51,15 @@ def test_avd_default_never_booted_is_dead(env, cfg, home):
         fs["Pixel 10 Pro"].verdict == "review" and "has snapshots/" in fs["Pixel 10 Pro"].evidence
     )
     assert fs["Old_Tablet"].verdict == "stale"
-    # no avdmanager on PATH → manual action that names the official CLI
-    assert fs["Medium_Phone"].action.kind == "print"
-    assert fs["Medium_Phone"].action.argv[-3:] == ["avd", "-n", "Medium_Phone"]
+    # no avdmanager installed → fall back to removing the .avd dir + .ini directly
+    assert fs["Medium_Phone"].action.kind == "remove"
+    assert fs["Medium_Phone"].action.path.endswith("Medium_Phone.avd")
+    assert fs["Medium_Phone"].action.extra_paths[0].endswith("Medium_Phone.ini")
     snaps = fs["Pixel 10 Pro snapshots"]
     assert (
         snaps.category == "avd-snapshots"
         and snaps.verdict == "shared"
-        and snaps.action.kind == "trash"
+        and snaps.action.kind == "remove"
     )
     assert "2 snapshot(s)" in snaps.evidence
 

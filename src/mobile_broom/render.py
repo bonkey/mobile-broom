@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 import textwrap
 from collections import defaultdict
@@ -62,7 +63,7 @@ def render(
                     for i, ln in enumerate(textwrap.wrap(ev, max(20, width - 20))):
                         out.write(" " * 18 + ("— " if i == 0 else "  ") + ln + "\n")
                 if f.action and f.action.kind == "print":
-                    out.write(f"           manual: {' '.join(f.action.argv or [])}\n")
+                    out.write(f"           manual: {shlex.join(f.action.argv or [])}\n")
         out.write("\n")
     if not findings:
         out.write("nothing found\n")
