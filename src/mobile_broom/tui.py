@@ -11,10 +11,19 @@ from .model import GROUPS, Finding, sort_key
 from .sizer import Sizer, human
 
 ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
-HELP = (
-    "↑↓/jk move · →/enter expand · ←/h collapse · space mark · a mark dead in group · "
-    "n unmark all · d act · r rescan · ? keys · q quit"
-)
+# (key, what it does) — keys are drawn as highlighted chips so they stand out from the prose
+HELP = [
+    ("↑↓ jk", "move"),
+    ("→ ⏎", "expand"),
+    ("← h", "collapse"),
+    ("space", "mark"),
+    ("a", "mark dead in group"),
+    ("n", "unmark all"),
+    ("d", "act"),
+    ("r", "rescan"),
+    ("?", "keys"),
+    ("q", "quit"),
+]
 LEGEND = [
     "[ ] removable — space marks it",
     "[x] marked",
@@ -44,6 +53,23 @@ def _size(n: int | None) -> str:
     return "   …  " if n is None else human(n)
 
 
+def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
+    """Draw `lead` then `[key] desc` pairs, keys as chips. Returns the x after the last one."""
+    if lead:
+        _put(scr, y, x, lead, lead_attr)
+        x += len(lead)
+    for i, (key, desc) in enumerate(items):
+        if i:
+            _put(scr, y, x, "  ", 0)
+            x += 2
+        chip = f" {key} "
+        _put(scr, y, x, chip, key_attr)
+        x += len(chip)
+        _put(scr, y, x, f" {desc}", curses.A_DIM)
+        x += len(desc) + 1
+    return x
+
+
 class Row:
     def __init__(self, kind, key, label, finding=None, depth=0, pending=False):
         self.kind, self.key, self.label, self.finding, self.depth = kind, key, label, finding, depth
@@ -61,6 +87,7 @@ class Browser:
         self.msg = ""
         self.status = ""  # collecting/sizing progress shown in the header
         self.colors = {}
+        self.key_attr = curses.A_BOLD | curses.A_REVERSE
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
@@ -70,12 +97,14 @@ class Browser:
                     ("stale", curses.COLOR_YELLOW),
                     ("shared", curses.COLOR_BLUE),
                     ("ok", curses.COLOR_GREEN),
+                    ("key", curses.COLOR_CYAN),
                 ),
                 start=1,
             ):
                 curses.init_pair(i, c, -1)
                 self.colors[v] = curses.color_pair(i)
             self.colors["review"] = curses.A_DIM
+            self.key_attr = self.colors["key"] | curses.A_BOLD | curses.A_REVERSE
 
     # -- collecting ------------------------------------------------------
     def collect(self, refresh: bool):
@@ -156,7 +185,7 @@ class Browser:
         if self.status:
             head += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
-        _put(scr, 1, 0, HELP, curses.A_DIM)
+        _hints(scr, 1, 0, HELP, self.key_attr)
         body = max(1, h - 6)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
         self.off = min(self.off, self.cur)
@@ -206,12 +235,13 @@ class Browser:
         scr = self.scr
         scr.erase()
         h, _w = scr.getmaxyx()
-        _put(
+        _hints(
             scr,
             0,
             0,
-            f"about to run {len(steps)} action(s) — y delete · t move to ~/.Trash instead · any other key back",
-            curses.A_BOLD,
+            [("y", "delete"), ("t", "move to ~/.Trash instead"), ("any other key", "back")],
+            self.key_attr,
+            lead=f"about to run {len(steps)} action(s)   ",
         )
         for i, ln in enumerate(lines[: h - 3]):
             _put(scr, 2 + i, 0, ln)
@@ -226,10 +256,13 @@ class Browser:
         state = {f.key: (actions.PENDING, "") for f in marked}
         scr = self.scr
 
-        def draw(title):
+        def draw(title, done=False):
             scr.erase()
             h, _w = scr.getmaxyx()
-            _put(scr, 0, 0, title, curses.A_BOLD)
+            if done:
+                _hints(scr, 0, 0, [("any key", "continue")], self.key_attr, lead=title + "   ")
+            else:
+                _put(scr, 0, 0, title, curses.A_BOLD)
             body = max(1, h - 3)
             # keep the position being worked on in view
             active = next(
@@ -271,17 +304,32 @@ class Browser:
         gone = {r.finding.key for r in results if r.ok}
         self.findings = [f for f in self.findings if f.key not in gone]
         self.marked -= gone
-        draw(actions.summary(results) + " — any key to continue")
+        draw(actions.summary(results), done=True)
         scr.getch()
         self.msg = actions.summary(results)
 
-    def show_text(self, title, lines):
+    def show_text(self, title, lines, hints=(("any key", "continue"),)):
         scr = self.scr
         scr.erase()
         h, _w = scr.getmaxyx()
-        _put(scr, 0, 0, title, curses.A_BOLD)
+        _hints(scr, 0, 0, list(hints), self.key_attr, lead=title + "   ")
         for i, ln in enumerate(lines[: h - 2]):
             _put(scr, 2 + i, 0, ln)
+        scr.refresh()
+        scr.getch()
+
+    def show_keys(self):
+        scr = self.scr
+        scr.erase()
+        _hints(scr, 0, 0, [("any key", "continue")], self.key_attr, lead="keys   ")
+        width = max(len(k) for k, _d in HELP) + 2
+        for i, (key, desc) in enumerate(HELP):
+            _put(scr, 2 + i, 2, f" {key} ".ljust(width), self.key_attr)
+            _put(scr, 2 + i, 2 + width + 1, desc)
+        y = 3 + len(HELP)
+        _put(scr, y, 0, "marks", curses.A_BOLD)
+        for i, ln in enumerate(LEGEND):
+            _put(scr, y + 1 + i, 2, ln)
         scr.refresh()
         scr.getch()
 
@@ -293,7 +341,7 @@ class Browser:
         while True:
             rows = self.rows()
             if not rows:
-                self.show_text("nothing found — any key to quit", [])
+                self.show_text("nothing found", [], hints=[("any key", "quit")])
                 return
             self.cur = max(0, min(self.cur, len(rows) - 1))
             self.draw(rows)
@@ -339,7 +387,7 @@ class Browser:
             elif k == ord("r"):
                 self.collect(refresh=True)
             elif k == ord("?"):
-                self.show_text("keys — any key to continue", HELP.split(" · ") + [""] + LEGEND)
+                self.show_keys()
 
     def _toggle_all(self, row, pred):
         if row is None:

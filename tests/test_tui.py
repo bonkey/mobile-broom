@@ -12,6 +12,7 @@ class FakeScreen:
     def __init__(self, h=30, w=160):
         self.h, self.w = h, w
         self.lines: dict[int, str] = {}
+        self.attrs: list[tuple] = []
         self.frames: list[dict[int, str]] = []
         self.keys: list[int] = []
 
@@ -24,6 +25,7 @@ class FakeScreen:
     def addnstr(self, y, x, text, n, attr=0):
         cur = self.lines.get(y, "").ljust(x)
         self.lines[y] = (cur[:x] + text[:n]).rstrip()
+        self.attrs.append((y, text[:n], attr))
 
     def refresh(self):
         self.frames.append(dict(self.lines))
@@ -118,3 +120,17 @@ def test_act_draws_live_status_per_position(browser, monkeypatch):
     assert "✓ ok" in frames[-1] and "deleted" in frames[-1]
     assert "done: 1 ok, 0 failed, 0 manual" in frames[-1]
     assert [f.label for f in b.findings] == ["iPhone · iOS 27"]
+
+
+def test_key_hints_are_drawn_as_highlighted_chips(browser):
+    """Every key on the help line is a chip (bold+reverse), the description is dim."""
+    b, scr = browser
+    b.draw(b.rows())
+    chips = [(t, a) for y, t, a in scr.attrs if y == 1 and a == b.key_attr]
+    assert [t for t, _a in chips] == [f" {k} " for k, _d in tui.HELP]
+    assert b.key_attr & curses.A_REVERSE and b.key_attr & curses.A_BOLD
+    descs = [t for y, t, a in scr.attrs if y == 1 and a == curses.A_DIM]
+    assert " move" in descs and " quit" in descs
+    scr.attrs.clear()
+    b.show_keys()
+    assert sum(1 for _y, _t, a in scr.attrs if a == b.key_attr) == len(tui.HELP) + 1
