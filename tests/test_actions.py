@@ -49,7 +49,7 @@ def test_root_owned_remove_becomes_manual_and_is_quoted(monkeypatch):
     monkeypatch.setattr(actions, "is_root_owned", lambda p: True)
     out = io.StringIO()
     res = actions.execute([f("r", Action(kind="remove", path="/Library/has space;semi"))], out=out)
-    assert res[0].note == "manual"
+    assert res[0].status == actions.MANUAL and not res[0].ok
     assert "sudo rm -rf '/Library/has space;semi'" in out.getvalue()
 
 
@@ -114,8 +114,9 @@ def test_dry_run_runs_only_dry_run_argv(tmp_path):
     )
     assert calls == [["xcrun", "simctl", "runtime", "delete", "U", "--dry-run"]]
     assert victim.exists()
-    assert all(r.ok and r.note == "dry-run" for r in res)
+    assert all(r.ok and r.status == actions.DRY for r in res)
     assert "would" in out.getvalue() and "Would delete X" in out.getvalue()
+    assert actions.summary(res) == "dry-run: 2 would run"
 
 
 def test_execute_runs_argv_and_trashes(tmp_path, monkeypatch):
@@ -143,3 +144,38 @@ def test_execute_runs_argv_and_trashes(tmp_path, monkeypatch):
     assert calls == [["tool", "go"], ["tool", "fail"]]
     assert [r.ok for r in res] == [True, False, True]
     assert not victim.exists()
+    assert actions.summary(res) == "done: 2 ok, 1 failed, 0 manual"
+
+
+def test_execute_reports_each_finding_and_calls_progress(tmp_path):
+    """One status line per finding — even when several share one deduped action — and
+    the progress callback sees busy → ok/FAIL per finding, in order."""
+    shared = Action(kind="argv", argv=["xcrun", "simctl", "delete", "unavailable"])
+    victim = mkfile(tmp_path / "v" / "f", size=1).parent
+    fs = [f("dev-a", shared), f("dev-b", shared), f("dd", Action(kind="remove", path=str(victim)))]
+    seen = []
+
+    class R:
+        returncode, stdout, stderr = 0, "done", ""
+
+    out = io.StringIO()
+    res = actions.execute(
+        fs,
+        out=out,
+        runner=lambda argv: R(),
+        progress=lambda f, st, note: seen.append((f.label, st)),
+    )
+    lines = [ln for ln in out.getvalue().splitlines() if ln.strip()]
+    assert len(lines) == 3
+    assert [ln.split()[0] for ln in lines] == ["ok", "ok", "ok"]
+    assert "derived-data/dev-a" in lines[0] and "derived-data/dev-b" in lines[1]
+    assert "deleted" in lines[2]
+    assert seen == [
+        ("dev-a", actions.RUNNING),
+        ("dev-b", actions.RUNNING),
+        ("dev-a", actions.OK),
+        ("dev-b", actions.OK),
+        ("dd", actions.RUNNING),
+        ("dd", actions.OK),
+    ]
+    assert [r.status for r in res] == [actions.OK] * 3

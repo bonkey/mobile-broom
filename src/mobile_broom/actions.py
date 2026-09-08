@@ -22,6 +22,11 @@ class Result:
     finding: Finding
     ok: bool
     note: str
+    status: str = ""  # one of OK / FAIL / MANUAL / DRY
+
+
+# Per-finding status values handed to `progress` callbacks and printed by the CLI.
+PENDING, RUNNING, OK, FAIL, MANUAL, DRY = "wait", "busy", "ok", "FAIL", "manual", "would"
 
 
 def trash_dir() -> Path:
@@ -87,30 +92,54 @@ def describe_plan(steps, out=None) -> None:
     out.write(f"  candidates: {human(total).strip()} across {len(steps)} action(s)\n")
 
 
+def status_line(status: str, f: Finding, note: str = "") -> str:
+    """One line per finding: `  ok      2.1G  derived-data/Foo-abc   deleted`."""
+    return f"  {status:<6} {human(f.size)}  {f.category}/{f.label}" + (f"   {note}" if note else "")
+
+
 def execute(
-    findings: list[Finding], dry_run: bool = False, trash: bool = False, out=None, runner=None
+    findings: list[Finding],
+    dry_run: bool = False,
+    trash: bool = False,
+    out=None,
+    runner=None,
+    progress=None,
 ) -> list[Result]:
+    """Run the plan. Writes one status line per finding to `out` as each one finishes and
+    calls `progress(finding, status, note)` at every state change (RUNNING → OK/FAIL/…),
+    so a UI can show each position live."""
     out = out or sys.stdout
     runner = runner or (
         lambda argv: subprocess.run(argv, capture_output=True, text=True, check=False)
     )
+    progress = progress or (lambda f, status, note: None)
+
+    def report(fs, status, note, ok):
+        for f in fs:
+            out.write(status_line(status, f, note) + "\n")
+            out.flush()
+            progress(f, status, note)
+        return [Result(f, ok, note, status) for f in fs]
+
     results: list[Result] = []
     for a, fs in plan(findings):
         if a.kind == "print":
-            out.write(f"  manual  {shlex.join(a.argv or [])}   (no safe actor; run yourself)\n")
-            results.extend(Result(f, False, "manual") for f in fs)
+            note = f"{shlex.join(a.argv or [])}   (no safe actor; run yourself)"
+            results += report(fs, MANUAL, note, False)
             continue
         if dry_run:
             if a.kind == "argv" and a.dry_run_argv:
                 r = runner(a.dry_run_argv)
                 tail = (r.stdout or r.stderr or "").strip().splitlines()
-                out.write(f"  would   {a.describe()}" + (f"  ⇒ {tail[-1]}" if tail else "") + "\n")
+                note = a.describe() + (f"  ⇒ {tail[-1]}" if tail else "")
             elif a.kind == "remove" and trash:
-                out.write(f"  would   trash {a.path}\n")
+                note = f"trash {a.path}"
             else:
-                out.write(f"  would   {a.describe()}\n")
-            results.extend(Result(f, True, "dry-run") for f in fs)
+                note = a.describe()
+            results += report(fs, DRY, note, True)
             continue
+        for f in fs:
+            progress(f, RUNNING, a.describe())
         try:
             if a.kind == "remove":
                 notes = [remove(pp, trash=trash) for pp in [a.path, *(a.extra_paths or [])]]
@@ -119,10 +148,20 @@ def execute(
             else:
                 r = runner(a.argv)
                 ok = r.returncode == 0
-                note = ((r.stdout if ok else r.stderr) or "").strip().splitlines()
-                note = note[-1] if note else ("ok" if ok else f"exit {r.returncode}")
+                lines = ((r.stdout if ok else r.stderr) or "").strip().splitlines()
+                note = (
+                    a.describe()
+                    + " → "
+                    + (lines[-1] if lines else ("ok" if ok else f"exit {r.returncode}"))
+                )
         except Exception as e:  # noqa: BLE001
             ok, note = False, str(e)
-        out.write(f"  {'ok  ' if ok else 'FAIL'}    {a.describe()}  {note}\n")
-        results.extend(Result(f, ok, note) for f in fs)
+        results += report(fs, OK if ok else FAIL, note, ok)
     return results
+
+
+def summary(results: list[Result]) -> str:
+    n = {s: sum(1 for r in results if r.status == s) for s in (OK, FAIL, MANUAL, DRY)}
+    if n[DRY]:
+        return f"dry-run: {n[DRY]} would run"
+    return f"done: {n[OK]} ok, {n[FAIL]} failed, {n[MANUAL]} manual"

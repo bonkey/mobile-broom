@@ -72,11 +72,16 @@ class Finding:
     verdict: str
     size: int | None = None
     action: Action | None = None
+    locked: str | None = None  # why there is no action; required whenever action is None
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.verdict not in VERDICTS:
             raise ValueError(f"bad verdict {self.verdict!r} for {self.label}")
+        if self.action is None and not self.locked:
+            raise ValueError(f"{self.label}: no action and no `locked` reason")
+        if self.action is not None and self.locked:
+            raise ValueError(f"{self.label}: has an action, `locked` must be empty")
         if self.category not in CATEGORY_GROUP:
             raise ValueError(f"unknown category {self.category!r}")
         if self.group != CATEGORY_GROUP[self.category]:

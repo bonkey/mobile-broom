@@ -133,12 +133,8 @@ def cmd_clean(args, env: Env, cfg: Config) -> int:
             return 1
     print()
     results = actions.execute(todo, dry_run=False, trash=args.trash)
-    failed = [r for r in results if not r.ok and r.note != "manual"]
-    manual = [r for r in results if r.note == "manual"]
-    print(
-        f"\ndone: {len(results) - len(failed) - len(manual)} ok, {len(failed)} failed, {len(manual)} manual"
-    )
-    return 1 if failed else 0
+    print("\n" + actions.summary(results))
+    return 1 if any(r.status == actions.FAIL for r in results) else 0
 
 
 def cmd_config(args) -> int:

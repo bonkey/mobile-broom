@@ -41,7 +41,9 @@ Verify: `mise ls-remote pipx:bonkey/mobile-broom` must list the new version.
 - Correctness rules that must not regress: never traverse a mountpoint (`st_dev` guard in
   `sizer.walk_size`), never size the mounted `CoreSimulator/Volumes/*` (size the `AssetsV2` asset
   or use simctl `sizeBytes`), totals are "candidates" not "reclaimable", detect a blocked `simctl`
-  instead of reporting "no runtimes".
+  instead of reporting "no runtimes", a finding without an `action` must carry a `locked` reason
+  (`model.Finding` raises otherwise — the TUI shows it), worktrees are never removed (only
+  git-ignored artifact dirs inside them are).
 
 ## This machine's git quirks (Claude/agent sessions)
 

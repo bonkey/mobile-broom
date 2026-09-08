@@ -56,7 +56,13 @@ mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 ```
 
 TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · space mark · `a` mark all dead in
-group · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `r` resize · `q`.
+group · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `r` rescan · `?` keys · `q`.
+
+The tree fills in while finders run and sizes replace the `…` indicators one row at a time
+(same on `r`). `[-]` marks a finding that cannot be acted on; the bottom line says why
+(`locked: device is booted; shut it down first`), and space on it repeats the reason. `d` shows
+every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
+it runs; `clean` prints the same one line per finding.
 
 ### Verdicts
 
@@ -66,6 +72,9 @@ group · `n` unmark all · `d` act on marked (confirm screen shows the exact com
 | `stale` | idle longer than `stale_days` (default 30) | with `--stale` |
 | `shared` | no owning project; safe to drop, costs a rebuild | with `--shared` |
 | `review` | facts attached, decision is yours (TUI can still mark it) | never |
+
+A finding with no action always carries a `locked` reason (booted simulator, not git-ignored,
+VM disk image, …) — shown in the TUI, the text report and `--json`.
 
 Totals are labelled **candidates**: each path is sized on its own (`st_blocks`), so APFS
 clones can overlap and the sum is not a reclaim promise.
@@ -87,9 +96,10 @@ clones can overlap and the sum is not a reclaim promise.
 | `system-images` | installed under `$ANDROID_HOME/system-images` vs every AVD's `image.sysdir.1` | `sdkmanager --uninstall` (falls back to deleting the image dir) |
 | `gradle-caches` `gradle-dists` | versions in `~/.gradle/caches/<v>` + `wrapper/dists` vs `gradle-wrapper.properties` under the scan roots | delete |
 | `gradle-jdks` | `~/.gradle/jdks` majors vs `jvmToolchain(..)` / `JavaLanguageVersion.of(..)` in build files (inconclusive → review) | delete |
-| `worktree-artifacts` | `git worktree list --porcelain` per repo under the scan roots; `.build`, `build/`, `node_modules`, `Pods`, … per worktree; dirty flagged. **Report-only** — `wt` owns lifecycle. | — |
-| `orphan-derived-data` | DerivedData keyed to a vanished worktree path — report-only cross-reference | — |
-| `general` | npm/bun/pnpm, colima/Docker, Homebrew, mise (older versions → stale), JetBrains (older IDE builds → stale) | `mise uninstall`, delete, or `mo clean` |
+| `worktree-artifacts` | `git worktree list --porcelain` per repo under the scan roots; one finding per artifact dir inside each worktree — `.build`, `build/`, `DerivedData` (and `.derivedData`, `derived_data`), `Derived` (tuist), `SourcePackages`, `node_modules`, `Pods`, `.gradle`, `Carthage/{Build,Checkouts}`, `vendor/bundle`, at the root or one level down. `git check-ignore` decides: ignored → shared (stale past `stale_days`), else review + locked. The worktree itself is never touched — `wt` owns lifecycle. | delete the artifact dir |
+| `orphan-derived-data` | DerivedData keyed to a vanished worktree path — report-only cross-reference (act via `derived-data`) | — |
+| `npm` `homebrew` | `~/.npm/_cacache`, `_npx`, pnpm store/cache, yarn, `~/.bun/install/cache`, Homebrew cache + logs — pure download caches → shared | delete |
+| `docker` `mise` `jetbrains` | colima/Docker/OrbStack disks (VM images → locked), mise (older versions → stale), JetBrains (older IDE builds → stale) | `mise uninstall`, delete |
 
 ## Safety
 
@@ -98,7 +108,8 @@ clones can overlap and the sum is not a reclaim promise.
   `avdmanager`/`sdkmanager` when installed and fall back to removing the exact dirs they would.
 - No sudo. Root-owned paths get the command printed instead (shell-quoted, copy-paste safe).
 - Deletes by default; `--trash` (or `t` in the TUI confirm) moves to `~/.Trash` instead.
-- Booted simulators, their runtimes, dirty worktrees and `protected` globs from config are never acted on.
+- Booted simulators, their runtimes, worktrees themselves (only git-ignored artifact dirs inside them) and `protected` globs from config are never acted on.
+- Everything without an action says why (`locked`), so "not removable" is never a mystery.
 - `--dry-run` on every `clean`; for runtimes it runs `simctl runtime delete --dry-run` and shows simctl's own answer.
 - `simctl` needs an unsandboxed process (XPC to CoreSimulatorService). When blocked, mobile-broom says so and still reports runtimes from `images.plist`, with the commands printed for you to run.
 

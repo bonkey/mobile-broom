@@ -25,6 +25,7 @@ def _simctl_down(category: str, env) -> Finding:
         size=0,
         evidence=env.simctl_error or "simctl failed",
         verdict="review",
+        locked="simctl unreachable; nothing to act on until it works",
         extra={"error": env.simctl_error},
     )
 
@@ -127,10 +128,12 @@ def find_runtimes(env, cfg):
                 argv=["xcrun", "simctl", "runtime", "delete", ident],
                 dry_run_argv=["xcrun", "simctl", "runtime", "delete", ident, "--dry-run"],
             )
+            locked = None
             if is_booted:
                 verdict = "review"
                 evidence = "BOOTED now; " + evidence
                 action = None
+                locked = "a simulator on this runtime is booted; shut it down first"
             elif env.simctl_error:
                 action = Action(kind="print", argv=action.argv)
             yield Finding(
@@ -142,6 +145,7 @@ def find_runtimes(env, cfg):
                 evidence=evidence,
                 verdict=verdict,
                 action=action,
+                locked=locked,
                 extra={
                     "bundle_id": bid,
                     "build": im["build"],
@@ -198,9 +202,11 @@ def find_sim_data(env, cfg):
         state = d.get("state")
         age = age_days(last)
         used = f"last booted {when(last)} ({src})" if last else "no boot record"
+        locked = None
         if state == "Booted":
             verdict, action = "review", None
             evidence = f"BOOTED now; {rt}; {used}"
+            locked = "device is booted; shut it down first"
         else:
             verdict = "stale" if age is not None and age > cfg.stale_days else "review"
             evidence = f"{rt}; {used}"
@@ -214,6 +220,7 @@ def find_sim_data(env, cfg):
             evidence=evidence,
             verdict=verdict,
             action=action,
+            locked=locked,
             extra={"udid": d.get("udid"), "state": state, "last_booted": last},
         )
 
@@ -385,6 +392,7 @@ def find_spm_cache(env, cfg):
             evidence=f"{note}; modified {when(mtime_of(path))}",
             verdict=verdict,
             action=Action(kind="remove", path=str(path)) if verdict == "shared" else None,
+            locked=None if verdict == "shared" else "tiny; holds package security fingerprints",
         )
 
 
@@ -430,11 +438,13 @@ def find_previews(env, cfg):
         )
         if running:
             verdict, action, ev = "review", None, f"{note}; a preview device is BOOTED now"
+            locked = "a preview device is booted; close the Xcode canvas first"
         else:
-            verdict, action, ev = (
+            verdict, action, ev, locked = (
                 "shared",
                 Action(kind="remove", path=str(path)),
                 f"{note}; modified {when(mtime_of(path))}; recreated on next preview",
+                None,
             )
         yield Finding(
             category="previews",
@@ -444,4 +454,5 @@ def find_previews(env, cfg):
             evidence=ev,
             verdict=verdict,
             action=action,
+            locked=locked,
         )

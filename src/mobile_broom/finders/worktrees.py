@@ -1,4 +1,6 @@
-"""Worktree finders — report-only. `wt list` owns lifecycle; this adds the disk dimension."""
+"""Worktree finders. The worktree itself is never touched (`wt` owns lifecycle); what gets
+an action is the build residue inside it — `.build`, `DerivedData`, `Pods`, `node_modules`, … —
+one finding per artifact dir, removable on its own when git ignores it."""
 
 from __future__ import annotations
 
@@ -7,31 +9,44 @@ import plistlib
 import subprocess
 from pathlib import Path
 
-from ..model import Finding
+from ..model import Action, Finding
 from . import register
-from ._util import listdir, when
+from ._util import age_days, listdir, mtime_of, when
 from .scan import git_dirs
 
-ARTIFACT_DIRS = (
-    ".build",
-    "build",
-    "node_modules",
-    "Pods",
-    "DerivedData",
-    ".gradle",
-    "SourcePackages",
-    "Carthage/Build",
-)
+# dir (relative to the worktree, or to one of its top-level subdirs) → what regenerates it
+ARTIFACT_DIRS: dict[str, str] = {
+    ".build": "swift build / xcodebuild",
+    "build": "a rebuild",
+    "DerivedData": "an Xcode rebuild",
+    ".derivedData": "an Xcode rebuild",
+    "derivedData": "an Xcode rebuild",
+    "derived_data": "an Xcode rebuild",
+    "Derived": "tuist generate",
+    "SourcePackages": "Xcode package resolution",
+    "node_modules": "npm/yarn/pnpm/bun install",
+    "Pods": "pod install",
+    ".gradle": "a gradle build",
+    "Carthage/Build": "carthage bootstrap",
+    "Carthage/Checkouts": "carthage bootstrap",
+    "vendor/bundle": "bundle install",
+}
 
 
-def _git(cwd: str, *args: str) -> str:
+def _git(cwd: str, *args: str, stdin: str | None = None) -> str:
     try:
         out = subprocess.run(
-            ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=30, check=False
+            ["git", "-C", cwd, *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+            input=stdin,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    return out.stdout if out.returncode == 0 else ""
+    # check-ignore exits 1 when nothing matched — still a valid (empty) answer
+    return out.stdout if out.returncode in (0, 1) else ""
 
 
 def worktrees_of(repo: str) -> list[dict]:
@@ -55,12 +70,26 @@ def worktrees_of(repo: str) -> list[dict]:
 
 
 def artifact_dirs(wt: str) -> list[str]:
-    found = []
+    """Artifact dirs at the worktree root and one level down (ios/Pods, app/build,
+    packages/*/node_modules). Deduped by inode: APFS is case-insensitive, so `build`
+    and `Build` are the same directory."""
+    found: list[str] = []
+    seen: set[tuple] = set()
+
+    def add(p: str):
+        if not os.path.isdir(p) or os.path.islink(p):
+            return
+        try:
+            st = os.stat(p)
+        except OSError:
+            return
+        if (st.st_dev, st.st_ino) in seen:
+            return
+        seen.add((st.st_dev, st.st_ino))
+        found.append(p)
+
     for name in ARTIFACT_DIRS:
-        p = os.path.join(wt, name)
-        if os.path.isdir(p) and not os.path.islink(p):
-            found.append(p)
-    # one level down (ios/Pods, app/build, packages/*/node_modules)
+        add(os.path.join(wt, name))
     for sub in listdir(wt):
         if sub.startswith(".") or sub in ARTIFACT_DIRS:
             continue
@@ -68,10 +97,19 @@ def artifact_dirs(wt: str) -> list[str]:
         if not os.path.isdir(sp) or os.path.islink(sp):
             continue
         for name in ARTIFACT_DIRS:
-            p = os.path.join(sp, name)
-            if os.path.isdir(p) and not os.path.islink(p):
-                found.append(p)
+            add(os.path.join(sp, name))
     return found
+
+
+def ignored_paths(wt: str, paths: list[str]) -> set[str]:
+    """Subset of `paths` that git ignores in this worktree (one `check-ignore --stdin` call).
+    A tracked or un-ignored dir is not an artifact we can prove regenerable."""
+    if not paths:
+        return set()
+    rel = [os.path.relpath(p, wt) for p in paths]
+    out = _git(wt, "check-ignore", "--stdin", stdin="\n".join(rel) + "\n")
+    hit = {ln.strip() for ln in out.splitlines() if ln.strip()}
+    return {p for p, r in zip(paths, rel) if r in hit}
 
 
 def all_worktrees(cfg) -> dict[str, list[dict]]:
@@ -95,32 +133,51 @@ def find_worktree_artifacts(env, cfg):
             arts = artifact_dirs(wt["path"])
             if not arts:
                 continue
+            ignored = ignored_paths(wt["path"], arts)
             dirty = bool(_git(wt["path"], "status", "--porcelain").strip())
             last = _git(wt["path"], "log", "-1", "--format=%cI").strip()
-            label = f"{repo_name} @ {wt['branch'] or ('detached' if wt['detached'] else '?')}"
-            bits = [
-                f"{len(arts)} artifact dir(s): "
-                + ", ".join(os.path.relpath(a, wt["path"]) for a in arts)
+            branch = wt["branch"] or ("detached" if wt["detached"] else "?")
+            wt_bits = [
+                "worktree DIRTY (uncommitted changes)" if dirty else "worktree clean",
+                f"last commit {when(last)}" if last else "no commits",
+                "worktree itself untouched (`wt` owns lifecycle)",
             ]
-            bits.append("DIRTY (uncommitted changes)" if dirty else "clean")
-            if last:
-                bits.append(f"last commit {when(last)}")
-            bits.append("lifecycle: `wt list`")
-            yield Finding(
-                category="worktree-artifacts",
-                group="worktrees",
-                label=label,
-                paths=arts,
-                evidence="; ".join(bits),
-                verdict="review",
-                action=None,
-                extra={
-                    "worktree": wt["path"],
-                    "branch": wt["branch"],
-                    "dirty": dirty,
-                    "repo": repo_name,
-                },
-            )
+            for art in arts:
+                rel = os.path.relpath(art, wt["path"])
+                parts = rel.split(os.sep)
+                key = next(
+                    (k for k in ("/".join(parts[-2:]), parts[-1]) if k in ARTIFACT_DIRS), None
+                )
+                regen = ARTIFACT_DIRS.get(key, "a rebuild")
+                mt = mtime_of(art)
+                age = age_days(mt)
+                bits = [f"{regen} recreates it", f"modified {when(mt)}"]
+                if art in ignored:
+                    verdict = "stale" if age is not None and age > cfg.stale_days else "shared"
+                    action, locked = Action(kind="remove", path=art), None
+                    bits.insert(0, "git-ignored build artifact")
+                else:
+                    verdict, action = "review", None
+                    locked = "not git-ignored, so it may hold tracked or hand-made files"
+                    bits.insert(0, "NOT git-ignored")
+                yield Finding(
+                    category="worktree-artifacts",
+                    group="worktrees",
+                    label=f"{repo_name} @ {branch}: {rel}",
+                    paths=[art],
+                    evidence="; ".join(bits + wt_bits),
+                    verdict=verdict,
+                    action=action,
+                    locked=locked,
+                    extra={
+                        "worktree": wt["path"],
+                        "branch": wt["branch"],
+                        "dirty": dirty,
+                        "repo": repo_name,
+                        "artifact": rel,
+                        "ignored": art in ignored,
+                    },
+                )
 
 
 @register("orphan-derived-data")
@@ -154,5 +211,6 @@ def find_orphan_derived_data(env, cfg):
             evidence=f"WorkspacePath gone: {ws}; last accessed {when(d.get('LastAccessedDate'))}; act via `mobile-broom clean derived-data`",
             verdict="review",
             action=None,
+            locked="cross-reference only; the same entry is actionable as ios/derived-data",
             extra={"workspace": ws, "derived_data": name},
         )

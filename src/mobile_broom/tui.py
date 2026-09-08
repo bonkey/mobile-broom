@@ -1,16 +1,34 @@
-"""curses browser: groups collapsed → expand → mark → act. Conventions from simslim-profile.py."""
+"""curses browser: collect into the tree gradually → expand → mark → act, watching every
+position finish. Conventions from simslim-profile.py."""
 
 from __future__ import annotations
 
 import curses
 import io
 
-from . import actions, engine
-from .model import GROUPS, Finding
+from . import actions, finders
+from .model import GROUPS, Finding, sort_key
 from .sizer import Sizer, human
 
 ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
-HELP = "↑↓/jk move · →/enter expand · ←/h collapse · space mark · a mark dead in group · d act · r resize · q quit"
+HELP = (
+    "↑↓/jk move · →/enter expand · ←/h collapse · space mark · a mark dead in group · "
+    "n unmark all · d act · r rescan · ? keys · q quit"
+)
+LEGEND = [
+    "[ ] removable — space marks it",
+    "[x] marked",
+    "[-] locked — not removable; the bottom line says why",
+    "…   size not computed yet (rescan in progress)",
+]
+ICON = {
+    actions.PENDING: "·",
+    actions.RUNNING: "⟳",
+    actions.OK: "✓",
+    actions.FAIL: "✗",
+    actions.MANUAL: "!",
+    actions.DRY: "~",
+}
 
 
 def _put(scr, y, x, text, attr=0):
@@ -22,19 +40,26 @@ def _put(scr, y, x, text, attr=0):
             pass
 
 
+def _size(n: int | None) -> str:
+    return "   …  " if n is None else human(n)
+
+
 class Row:
-    def __init__(self, kind, key, label, finding=None, depth=0):
+    def __init__(self, kind, key, label, finding=None, depth=0, pending=False):
         self.kind, self.key, self.label, self.finding, self.depth = kind, key, label, finding, depth
+        self.pending = pending
 
 
 class Browser:
-    def __init__(self, scr, findings: list[Finding], env, cfg, selectors, sizer: Sizer):
-        self.scr, self.env, self.cfg, self.selectors, self.sizer = scr, env, cfg, selectors, sizer
-        self.findings = findings
-        self.open: set[str] = set()
+    def __init__(self, scr, env, cfg, selectors, refresh=False):
+        self.scr, self.env, self.cfg, self.selectors = scr, env, cfg, selectors
+        self.refresh = refresh
+        self.findings: list[Finding] = []
+        self.open: set[str] = set(GROUPS)  # groups open, categories collapsed
         self.marked: set[str] = set()
         self.cur = self.off = 0
         self.msg = ""
+        self.status = ""  # collecting/sizing progress shown in the header
         self.colors = {}
         if curses.has_colors():
             curses.start_color()
@@ -44,12 +69,41 @@ class Browser:
                     ("dead", curses.COLOR_RED),
                     ("stale", curses.COLOR_YELLOW),
                     ("shared", curses.COLOR_BLUE),
+                    ("ok", curses.COLOR_GREEN),
                 ),
                 start=1,
             ):
                 curses.init_pair(i, c, -1)
                 self.colors[v] = curses.color_pair(i)
             self.colors["review"] = curses.A_DIM
+
+    # -- collecting ------------------------------------------------------
+    def collect(self, refresh: bool):
+        """Run finders one category at a time, then size one finding at a time, redrawing
+        after every step so the tree fills in and sizes replace the … indicators."""
+        cats = finders.resolve(self.selectors)
+        self.findings = []
+        for i, cat in enumerate(cats, 1):
+            self.status = f"collecting {i}/{len(cats)}: {cat}"
+            self.draw(self.rows())
+            self.findings.extend(finders.run([cat], self.env, self.cfg))
+            self.findings.sort(key=sort_key)
+        sizer = Sizer(refresh=refresh)
+        todo = sum(1 for f in self.findings if f.size is None and f.paths)
+
+        def sized(i, n, f):
+            self.status = f"sizing {i}/{n}"
+            self.draw(self.rows())
+
+        self.status = f"sizing 0/{todo}"
+        self.draw(self.rows())
+        sizer.size_findings(self.findings, progress=sized)
+        self.findings.sort(key=sort_key)
+        self.marked &= {f.key for f in self.findings}
+        self.status = ""
+        self.msg = f"{len(self.findings)} findings" + (
+            f" · {self.env.simctl_error}" if self.env.simctl_error else ""
+        )
 
     # -- rows ------------------------------------------------------------
     def rows(self) -> list[Row]:
@@ -60,11 +114,13 @@ class Browser:
                 continue
             gsize = sum(f.size or 0 for f in gf)
             dead = sum(f.size or 0 for f in gf if f.verdict == "dead")
+            gpend = any(f.size is None for f in gf)
             out.append(
                 Row(
                     "group",
                     g,
                     f"{g}  {human(gsize).strip()} total · dead {human(dead).strip()} · {len(gf)} findings",
+                    pending=gpend,
                 )
             )
             if g not in self.open:
@@ -75,7 +131,15 @@ class Browser:
                     continue
                 csize = sum(f.size or 0 for f in cf)
                 key = f"{g}/{cat}"
-                out.append(Row("cat", key, f"{cat}  {human(csize).strip()} · {len(cf)}", depth=1))
+                out.append(
+                    Row(
+                        "cat",
+                        key,
+                        f"{cat}  {human(csize).strip()} · {len(cf)}",
+                        depth=1,
+                        pending=any(f.size is None for f in cf),
+                    )
+                )
                 if key not in self.open:
                     continue
                 for f in cf:
@@ -85,18 +149,16 @@ class Browser:
     def draw(self, rows):
         scr = self.scr
         scr.erase()
-        h, w = scr.getmaxyx()
+        h, _w = scr.getmaxyx()
         marked = [f for f in self.findings if f.key in self.marked]
         msize = sum(f.size or 0 for f in marked)
-        _put(
-            scr,
-            0,
-            0,
-            f"mobile-broom — {len(self.findings)} findings · marked {len(marked)} ({human(msize).strip()})",
-            curses.A_BOLD,
-        )
+        head = f"mobile-broom — {len(self.findings)} findings · marked {len(marked)} ({human(msize).strip()})"
+        if self.status:
+            head += f"   ⟳ {self.status}"
+        _put(scr, 0, 0, head, curses.A_BOLD)
         _put(scr, 1, 0, HELP, curses.A_DIM)
-        body = h - 4
+        body = max(1, h - 6)
+        self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
         self.off = min(self.off, self.cur)
         if self.cur >= self.off + body:
             self.off = self.cur - body + 1
@@ -107,29 +169,28 @@ class Browser:
             indent = "  " * row.depth
             if row.kind == "finding":
                 f = row.finding
-                mark = "x" if f.key in self.marked else (" " if f.action else "·")
+                mark = "x" if f.key in self.marked else (" " if f.action else "-")
                 attr = self.colors.get(f.verdict, 0)
                 _put(scr, y, 0, f"{'>' if idx == self.cur else ' '} {indent}[{mark}] ", sel)
                 x = 2 + len(indent) + 4
                 _put(scr, y, x, f"{f.verdict:<6}", attr | sel)
-                _put(scr, y, x + 7, f"{human(f.size)}  {f.label}", sel)
+                _put(scr, y, x + 7, f"{_size(f.size)}  {f.label}", sel)
             else:
                 arrow = "▾" if row.key in self.open else "▸"
-                _put(
-                    scr,
-                    y,
-                    0,
-                    f"{'>' if idx == self.cur else ' '} {indent}{arrow} {row.label}",
-                    sel | (curses.A_BOLD if row.kind == "group" else 0),
-                )
-        # detail line for the current finding
+                text = f"{'>' if idx == self.cur else ' '} {indent}{arrow} {row.label}"
+                if row.pending:
+                    text += " …"
+                _put(scr, y, 0, text, sel | (curses.A_BOLD if row.kind == "group" else 0))
+        # detail: evidence · action-or-lock · message
         if rows and rows[self.cur].kind == "finding":
             f = rows[self.cur].finding
-            act = f.action.describe() if f.action else "no action (report-only)"
-            _put(scr, h - 2, 0, f"— {f.evidence}"[: w - 1], curses.A_DIM)
-            _put(scr, h - 1, 0, f"  {act}"[: w - 1], curses.A_DIM)
-        elif self.msg:
-            _put(scr, h - 1, 0, self.msg[: w - 1], curses.A_DIM)
+            _put(scr, h - 3, 0, f"— {f.evidence}", curses.A_DIM)
+            if f.action:
+                _put(scr, h - 2, 0, f"  {f.action.describe()}", curses.A_DIM)
+            else:
+                _put(scr, h - 2, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
+        if self.msg:
+            _put(scr, h - 1, 0, self.msg, curses.A_DIM)
         scr.refresh()
 
     # -- actions ---------------------------------------------------------
@@ -143,30 +204,76 @@ class Browser:
         actions.describe_plan(steps, out=buf)
         lines = buf.getvalue().splitlines()
         scr = self.scr
-        while True:
+        scr.erase()
+        h, _w = scr.getmaxyx()
+        _put(
+            scr,
+            0,
+            0,
+            f"about to run {len(steps)} action(s) — y delete · t move to ~/.Trash instead · any other key back",
+            curses.A_BOLD,
+        )
+        for i, ln in enumerate(lines[: h - 3]):
+            _put(scr, 2 + i, 0, ln)
+        scr.refresh()
+        k = scr.getch()
+        if k not in (ord("y"), ord("Y"), ord("t"), ord("T")):
+            return
+        self.act(marked, trash=k in (ord("t"), ord("T")))
+
+    def act(self, marked: list[Finding], trash: bool):
+        """Run the plan with a live per-position status table."""
+        state = {f.key: (actions.PENDING, "") for f in marked}
+        scr = self.scr
+
+        def draw(title):
             scr.erase()
             h, _w = scr.getmaxyx()
-            _put(
-                scr,
-                0,
-                0,
-                f"about to run {len(steps)} action(s) — y delete · t move to ~/.Trash instead · any other key back",
-                curses.A_BOLD,
+            _put(scr, 0, 0, title, curses.A_BOLD)
+            body = max(1, h - 3)
+            # keep the position being worked on in view
+            active = next(
+                (i for i, f in enumerate(marked) if state[f.key][0] == actions.PENDING),
+                len(marked) - 1,
             )
-            for i, ln in enumerate(lines[: h - 3]):
-                _put(scr, 2 + i, 0, ln)
+            off = max(0, active - body + 1)
+            for i, f in enumerate(marked[off : off + body]):
+                st, note = state[f.key]
+                attr = {
+                    actions.OK: self.colors.get("ok", 0),
+                    actions.FAIL: self.colors.get("dead", 0),
+                    actions.MANUAL: self.colors.get("stale", 0),
+                    actions.RUNNING: curses.A_BOLD,
+                    actions.PENDING: curses.A_DIM,
+                }.get(st, 0)
+                _put(scr, 2 + i, 0, f"{ICON[st]} {st:<6}", attr)
+                _put(scr, 2 + i, 9, f"{human(f.size)}  {f.category}/{f.label}", attr)
+                if note:
+                    _put(
+                        scr,
+                        2 + i,
+                        9 + 8 + len(f.category) + 1 + len(f.label) + 3,
+                        note,
+                        curses.A_DIM,
+                    )
             scr.refresh()
-            k = scr.getch()
-            if k in (ord("y"), ord("Y"), ord("t"), ord("T")):
-                trash = k in (ord("t"), ord("T"))
-                out = io.StringIO()
-                results = actions.execute(marked, dry_run=False, trash=trash, out=out)
-                done = {r.finding.key for r in results if r.ok}
-                self.findings = [f for f in self.findings if f.key not in done]
-                self.marked -= done
-                self.show_text("results — any key to continue", out.getvalue().splitlines())
-                return
-            return
+
+        n = len(marked)
+        verb = "trashing" if trash else "deleting"
+
+        def progress(f, st, note):
+            state[f.key] = (st, note)
+            done = sum(1 for s, _n in state.values() if s not in (actions.PENDING, actions.RUNNING))
+            draw(f"{verb} {done}/{n} …")
+
+        draw(f"{verb} 0/{n} …")
+        results = actions.execute(marked, trash=trash, out=io.StringIO(), progress=progress)
+        gone = {r.finding.key for r in results if r.ok}
+        self.findings = [f for f in self.findings if f.key not in gone]
+        self.marked -= gone
+        draw(actions.summary(results) + " — any key to continue")
+        scr.getch()
+        self.msg = actions.summary(results)
 
     def show_text(self, title, lines):
         scr = self.scr
@@ -178,19 +285,11 @@ class Browser:
         scr.refresh()
         scr.getch()
 
-    def resize_all(self):
-        sizer = Sizer(refresh=True)
-        for f in self.findings:
-            f.size = None if f.paths else f.size
-        self.msg = "sizing…"
-        self.draw(self.rows())
-        sizer.size_findings(self.findings)
-        self.msg = "sizes refreshed"
-
     # -- loop ------------------------------------------------------------
     def loop(self):
         curses.curs_set(0)
         self.scr.keypad(True)
+        self.collect(refresh=self.refresh)
         while True:
             rows = self.rows()
             if not rows:
@@ -200,6 +299,7 @@ class Browser:
             self.draw(rows)
             k = self.scr.getch()
             row = rows[self.cur]
+            self.msg = ""
             if k in (ord("q"), 27):
                 return
             if k in (curses.KEY_UP, ord("k")):
@@ -215,21 +315,19 @@ class Browser:
                     self.open.symmetric_difference_update({row.key})
             elif k in (curses.KEY_LEFT, ord("h")):
                 if row.kind == "finding":
-                    self.open.discard(f"{row.finding.group}/{row.finding.category}")
-                    self.cur = next(
-                        i
-                        for i, r in enumerate(rows)
-                        if r.key == f"{row.finding.group}/{row.finding.category}"
-                    )
-                elif row.kind == "cat":
-                    self.open.discard(row.key)
+                    parent = f"{row.finding.group}/{row.finding.category}"
+                    self.open.discard(parent)
+                    self.cur = next(i for i, r in enumerate(rows) if r.key == parent)
                 else:
                     self.open.discard(row.key)
             elif k == ord(" "):
-                if row.kind == "finding" and row.finding.action:
-                    self.marked.symmetric_difference_update({row.finding.key})
-                    self.cur += 1
-                elif row.kind in ("group", "cat"):
+                if row.kind == "finding":
+                    if row.finding.action:
+                        self.marked.symmetric_difference_update({row.finding.key})
+                        self.cur += 1
+                    else:
+                        self.msg = f"not removable: {row.finding.locked}"
+                else:
                     self._toggle_all(row, lambda f: f.action is not None)
             elif k == ord("a"):
                 target = row if row.kind != "finding" else None
@@ -239,9 +337,9 @@ class Browser:
             elif k == ord("d"):
                 self.confirm_and_act()
             elif k == ord("r"):
-                self.resize_all()
+                self.collect(refresh=True)
             elif k == ord("?"):
-                self.show_text("keys", HELP.split(" · "))
+                self.show_text("keys — any key to continue", HELP.split(" · ") + [""] + LEGEND)
 
     def _toggle_all(self, row, pred):
         if row is None:
@@ -261,12 +359,8 @@ class Browser:
 def run(selectors, env, cfg, refresh=False) -> int:
     import sys
 
-    sys.stderr.write("mobile-broom: collecting…\n")
-    sizer = Sizer(refresh=refresh)
-    findings = engine.collect(selectors, env, cfg, sizer, progress=True)
-
     def main(scr):
-        Browser(scr, findings, env, cfg, selectors, sizer).loop()
+        Browser(scr, env, cfg, selectors, refresh=refresh).loop()
 
     try:
         curses.wrapper(main)

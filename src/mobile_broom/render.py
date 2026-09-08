@@ -64,6 +64,8 @@ def render(
                         out.write(" " * 18 + ("— " if i == 0 else "  ") + ln + "\n")
                 if f.action and f.action.kind == "print":
                     out.write(f"           manual: {shlex.join(f.action.argv or [])}\n")
+                elif f.action is None:
+                    out.write(f"           locked: {f.locked}\n")
         out.write("\n")
     if not findings:
         out.write("nothing found\n")
