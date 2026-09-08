@@ -47,8 +47,15 @@ Verify: `mise ls-remote pipx:bonkey/mobile-broom` must list the new version.
 
 ## This machine's git quirks (Claude/agent sessions)
 
-Commit signing (1Password `op-ssh-sign`) and the ssh agent are unreachable from agent sandboxes:
-use `git commit --no-gpg-sign` and push over https —
-`git -c credential.helper='!gh auth git-credential' push https://github.com/bonkey/mobile-broom.git main --tags`.
-Mention in the summary that the commit is unsigned. From the user's own shell, plain signed
-commits and `git push` (ssh) work normally.
+Commit signing is 1Password `op-ssh-sign` and ssh auth is the 1Password agent. Both work
+from agent sessions (sandboxed or not) as long as `SSH_AUTH_SOCK` points at 1Password's
+socket — the Bash tool inherits the stock launchd agent socket, which has no identities:
+
+```sh
+export SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+git commit -m …        # signed, as from the user's shell
+git push               # ssh, as from the user's shell
+```
+
+Never fall back to `--no-gpg-sign` or https-via-gh; if signing fails, 1Password is locked
+or the socket moved — say so and stop.
