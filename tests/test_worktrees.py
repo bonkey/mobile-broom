@@ -1,9 +1,11 @@
 import plistlib
 import subprocess
 
-from conftest import days_ago, mkfile
+from conftest import days_ago, mkfile, simctl_devices_json
 
 from mobile_broom.finders import run as run_finders
+
+DT = "com.apple.CoreSimulator.SimDeviceType."
 
 
 def git(cwd, *args):
@@ -104,3 +106,86 @@ def test_orphan_derived_data_cross_reference(env, cfg, home):
     assert fs[0].label.startswith("ios-sdk.old-branch")
     assert fs[0].action is None and "clean derived-data" in fs[0].evidence
     assert "derived-data" in fs[0].locked
+
+
+def test_worktree_simulators_are_dead_when_the_worktree_is_gone(env, cfg, home):
+    """A per-task simulator outlives its worktree; nothing else in the tool notices."""
+    repo = make_repo(home)
+    git(
+        repo,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "caregiver-elig",
+        str(home / "Projects/ios-sdk.caregiver-elig"),
+    )
+    env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    env.respond(
+        ["xcrun", "simctl", "list", "devicetypes", "--json"],
+        {"devicetypes": [{"identifier": f"{DT}iPhone-17-Pro", "name": "iPhone 17 Pro"}]},
+    )
+
+    def device(udid, name, **kw):
+        return {
+            "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+            "udid": udid,
+            "name": name,
+            "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+            "state": "Shutdown",
+            "isAvailable": True,
+            "dataPath": f"/d/{udid}",
+            "dataPathSize": 900_000_000,
+            "lastBootedAt": days_ago(3).isoformat(),
+            **kw,
+        }
+
+    env.respond(
+        ["xcrun", "simctl", "list", "devices", "--json"],
+        simctl_devices_json(
+            [
+                device("U-GONE", "MSP2-140-roi-accordion"),
+                device("U-LIVE", "caregiver-elig"),
+                device("U-BOOT", "old-branch-sim", state="Booted"),
+                device("U-STOCK", "iPhone 17 Pro"),
+                device("U-VARIANT", "iPhone 17 Pro (iOS 26)"),
+            ]
+        ),
+    )
+    fs = {f.extra["udid"]: f for f in run_finders(["worktree-simulators"], env, cfg)}
+    # Left alone: the live worktree, the stock name, and a hand-labelled stock variant.
+    assert set(fs) == {"U-GONE", "U-BOOT"}
+    gone = fs["U-GONE"]
+    assert gone.verdict == "dead" and gone.size == 900_000_000
+    assert gone.action.argv == ["xcrun", "simctl", "delete", "U-GONE"]
+    assert 'no live worktree or branch named "MSP2-140-roi-accordion"' in gone.evidence
+    assert "iOS 27.0 stays installed" in gone.evidence
+    assert fs["U-BOOT"].verdict == "review" and fs["U-BOOT"].action is None
+    assert "booted" in fs["U-BOOT"].locked
+
+
+def test_worktree_simulators_need_a_worktree_to_compare_against(env, cfg, home):
+    """No worktrees under the scan roots means no cross-reference, never a mass condemnation."""
+    env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    env.respond(
+        ["xcrun", "simctl", "list", "devicetypes", "--json"],
+        {"devicetypes": [{"identifier": f"{DT}iPhone-17-Pro", "name": "iPhone 17 Pro"}]},
+    )
+    env.respond(
+        ["xcrun", "simctl", "list", "devices", "--json"],
+        simctl_devices_json(
+            [
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                    "udid": "U-GONE",
+                    "name": "some-task",
+                    "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": "/d/gone",
+                    "dataPathSize": 1,
+                }
+            ]
+        ),
+    )
+    assert run_finders(["worktree-simulators"], env, cfg) == []

@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 from pathlib import Path
 
 from ..model import Action, Finding
 from . import register
 from ._util import age_days, listdir, mtime_of, when
+from .ios import last_boot, runtime_name
 from .scan import git_dirs
 
 # dir (relative to the worktree, or to one of its top-level subdirs) → what regenerates it
@@ -178,6 +180,99 @@ def find_worktree_artifacts(env, cfg):
                         "ignored": art in ignored,
                     },
                 )
+
+
+def slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+
+
+def live_worktree_names(cfg) -> set[str]:
+    """Slugs a per-task simulator could be named after: every live worktree dir, the part
+    after the `<repo>.` prefix `wt` gives it, and its branch."""
+    names: set[str] = set()
+    for wts in all_worktrees(cfg).values():
+        for wt in wts:
+            base = Path(wt["path"]).name
+            names.add(slug(base))
+            if "." in base:
+                names.add(slug(base.split(".", 1)[1]))
+            if wt["branch"]:
+                names.add(slug(wt["branch"]))
+    return {n for n in names if n}
+
+
+def named_after_live_worktree(name: str, live: set[str]) -> bool:
+    s = slug(name)
+    if not s:
+        return True  # unnamed: not provably spare
+    # Contained counts too: a "caregiver-elig" simulator for branch "MSP2-183/caregiver-elig".
+    return s in live or (len(s) >= 4 and any(s in n for n in live))
+
+
+def _adhoc(d: dict, defaults: dict[str, str]) -> bool:
+    """A device named after a task, not after hardware. A name that embeds its own device type
+    ("iPhone 16 Pro (iOS 18)") is a hand-labelled variant of that device, not a task simulator."""
+    default = defaults.get(d.get("deviceTypeIdentifier") or "")
+    if default is None or d.get("name") == default:
+        return False
+    return slug(default) not in slug(d.get("name") or "")
+
+
+@register("worktree-simulators")
+def find_worktree_simulators(env, cfg):
+    """Hand-made simulators — a name no device type carries by default — whose worktree and
+    branch are both gone. The same cross-reference as orphan-derived-data, on simctl devices.
+    Removing the device is safe: `simctl create` remakes it from the runtime, which stays."""
+    if not env.simctl_ok():
+        return
+    defaults = env.simctl_device_types()
+    if not defaults:
+        return
+    adhoc = [d for d in env.simctl_devices() if d.get("isAvailable", True) and _adhoc(d, defaults)]
+    if not adhoc:
+        return
+    live = live_worktree_names(cfg)
+    if not live:
+        return  # no worktrees under the scan roots: nothing to cross-reference against
+    for d in adhoc:
+        name = d.get("name") or ""
+        if named_after_live_worktree(name, live):
+            continue
+        last, src = last_boot(d)
+        used = f"last booted {when(last)} ({src})" if last else "no boot record"
+        rt = runtime_name(d.get("runtime", ""))
+        bits = [
+            f'no live worktree or branch named "{name}" ({len(live)} scanned)',
+            f'custom name (device type default: "{defaults[d["deviceTypeIdentifier"]]}")',
+            used,
+            f"{rt} stays installed; simctl create remakes the device",
+        ]
+        locked = None
+        if d.get("state") == "Booted":
+            verdict, action = "review", None
+            bits.insert(0, "BOOTED now")
+            locked = "device is booted; shut it down first"
+        else:
+            verdict = "dead"
+            action = Action(kind="argv", argv=["xcrun", "simctl", "delete", d["udid"]])
+        yield Finding(
+            category="worktree-simulators",
+            group="worktrees",
+            label=f"{name} · {rt}",
+            paths=[d["dataPath"]] if d.get("dataPath") else [],
+            size=d.get("dataPathSize"),
+            evidence="; ".join(bits),
+            verdict=verdict,
+            action=action,
+            locked=locked,
+            extra={
+                "udid": d.get("udid"),
+                "runtime": d.get("runtime"),
+                "state": d.get("state"),
+                "device_type": d.get("deviceTypeIdentifier"),
+                "worktrees_scanned": len(live),
+            },
+        )
 
 
 @register("orphan-derived-data")

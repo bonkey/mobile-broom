@@ -145,6 +145,18 @@ class Env:
                 out.append(d)
         return out
 
+    def simctl_device_types(self) -> dict[str, str]:
+        """deviceTypeIdentifier → the name Xcode gives that type by default. A device
+        named anything else was created by hand (per-task/worktree simulator)."""
+        if not self.simctl_ok():
+            return {}
+        data = self.run_json(["xcrun", "simctl", "list", "devicetypes", "--json"]) or {}
+        return {
+            t["identifier"]: t.get("name") or ""
+            for t in (data.get("devicetypes") or [])
+            if t.get("identifier")
+        }
+
     def simctl_runtime_images(self) -> list[dict]:
         if not self.simctl_ok():
             return []

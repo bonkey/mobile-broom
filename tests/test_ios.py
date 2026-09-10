@@ -1,3 +1,4 @@
+import os
 import plistlib
 
 from conftest import days_ago, mkfile, simctl_devices_json, write_images_plist
@@ -176,14 +177,113 @@ def test_sim_devices_and_data(env, cfg):
         ),
     )
     fs = run_finders(["sim-devices", "sim-data"], env, cfg)
-    dev = [f for f in fs if f.category == "sim-devices"]
-    assert len(dev) == 1 and dev[0].verdict == "dead" and "iOS 26.4" in dev[0].label
-    assert dev[0].action.argv == ["xcrun", "simctl", "delete", "unavailable"]
+    dev = {f.extra["udid"]: f for f in fs if f.category == "sim-devices"}
+    assert dev["U-OLD"].verdict == "dead" and "iOS 26.4" in dev["U-OLD"].label
+    assert dev["U-OLD"].action.argv == ["xcrun", "simctl", "delete", "unavailable"]
+    assert dev["U-STALE"].verdict == "stale"
+    assert dev["U-STALE"].action.argv == ["xcrun", "simctl", "delete", "U-STALE"]
+    assert dev["U-BOOT"].verdict == "review" and dev["U-BOOT"].action is None
+    # A small data dir is noise for sim-data, but the device itself is still removable.
+    assert dev["U-TINY"].verdict == "review"
+    assert dev["U-TINY"].action.argv == ["xcrun", "simctl", "delete", "U-TINY"]
     data = {f.extra["udid"]: f for f in fs if f.category == "sim-data"}
     assert "U-OLD" not in data and "U-TINY" not in data
     assert data["U-STALE"].verdict == "stale" and data["U-STALE"].size == 900_000_000
     assert data["U-STALE"].action.argv == ["xcrun", "simctl", "erase", "U-STALE"]
     assert data["U-BOOT"].verdict == "review" and data["U-BOOT"].action is None
+
+
+DT = "com.apple.CoreSimulator.SimDeviceType."
+
+
+def test_sim_devices_flag_leftovers_and_superseded_runtimes(env, cfg, tmp_path):
+    never = tmp_path / "sim" / "U-NEVER" / "data"
+    never.mkdir(parents=True)
+    old = days_ago(60).timestamp()
+    os.utime(never, (old, old))
+    env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    env.respond(
+        ["xcrun", "simctl", "list", "devicetypes", "--json"],
+        {
+            "devicetypes": [
+                {"identifier": f"{DT}iPhone-17-Pro", "name": "iPhone 17 Pro"},
+                {"identifier": f"{DT}iPhone-16-Pro", "name": "iPhone 16 Pro"},
+            ]
+        },
+    )
+    env.respond(
+        ["xcrun", "simctl", "list", "devices", "--json"],
+        simctl_devices_json(
+            [
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                    "udid": "U-TASK",
+                    "name": "MSP7-67-fix-login",
+                    "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": "/d/task",
+                    "dataPathSize": 900_000_000,
+                    "lastBootedAt": days_ago(40).isoformat(),
+                },
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                    "udid": "U-NEVER",
+                    "name": "wt-old-branch",
+                    "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": str(never),
+                    "dataPathSize": 400_000_000,
+                },
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                    "udid": "U-TODAY",
+                    "name": "wt-current-branch",
+                    "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": "/d/today",
+                    "dataPathSize": 300_000_000,
+                    "lastBootedAt": days_ago(1).isoformat(),
+                },
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+                    "udid": "U-STOCK-OLD",
+                    "name": "iPhone 16 Pro",
+                    "deviceTypeIdentifier": f"{DT}iPhone-16-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": "/d/stock-old",
+                    "dataPathSize": 800_000_000,
+                    "lastBootedAt": days_ago(2).isoformat(),
+                },
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                    "udid": "U-STOCK",
+                    "name": "iPhone 17 Pro",
+                    "deviceTypeIdentifier": f"{DT}iPhone-17-Pro",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                    "dataPath": "/d/stock",
+                    "dataPathSize": 800_000_000,
+                    "lastBootedAt": days_ago(2).isoformat(),
+                },
+            ]
+        ),
+    )
+    dev = {f.extra["udid"]: f for f in run_finders(["sim-devices"], env, cfg)}
+    assert dev["U-TASK"].verdict == "stale" and dev["U-TASK"].extra["adhoc"]
+    assert 'custom name (device type default: "iPhone 17 Pro")' in dev["U-TASK"].evidence
+    assert dev["U-TASK"].action.argv == ["xcrun", "simctl", "delete", "U-TASK"]
+    # Never booted, so the data dir dates it.
+    assert dev["U-NEVER"].verdict == "stale" and "data dir mtime" in dev["U-NEVER"].evidence
+    assert dev["U-TODAY"].verdict == "review" and dev["U-TODAY"].extra["adhoc"]
+    assert dev["U-TODAY"].action.argv == ["xcrun", "simctl", "delete", "U-TODAY"]
+    # An older runtime is still installed, so its devices are usable: marked, not condemned.
+    assert dev["U-STOCK-OLD"].verdict == "review" and dev["U-STOCK-OLD"].extra["superseded"]
+    assert "runtime older than the newest installed iOS 27.0" in dev["U-STOCK-OLD"].evidence
+    assert dev["U-STOCK"].verdict == "review" and not dev["U-STOCK"].extra["adhoc"]
 
 
 def test_simctl_blocked_is_reported_not_silent(env, cfg):

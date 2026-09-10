@@ -84,7 +84,7 @@ clones can overlap and the sum is not a reclaim promise.
 | category | signal | actor |
 |---|---|---|
 | `runtimes` | `/Library/Developer/CoreSimulator/Images/images.plist` (plistlib, no simctl needed): same `bundleIdentifier`, older `build` → superseded. `lastUsedAt` per image; absence flagged. Sizes from `simctl runtime list --json` `sizeBytes`, fallback = walk of the `AssetsV2/*.asset` store — **never** the mounted `Volumes/`. | `xcrun simctl runtime delete <uuid>` |
-| `sim-devices` | `isAvailable: false` in `simctl list devices --json` | `xcrun simctl delete unavailable` |
+| `sim-devices` | every device in `simctl list devices --json`: `isAvailable: false` → dead; idle > `stale_days` → stale; otherwise review with the facts attached — custom name (vs its device type's default in `simctl list devicetypes`), runtime older than the newest installed one for that platform. Idle age = `lastBootedAt`, else `data/var/run` mtime, else the data dir mtime; booted → locked | `xcrun simctl delete <udid>` (`delete unavailable` for the unavailable ones) |
 | `sim-data` | `dataPathSize` + `lastBootedAt` (or `data/var/run` mtime on Xcode 26+, which omits it) | `xcrun simctl erase <udid>` |
 | `device-support` | `<model> <os> (<build>)`: only the newest per model is kept; older builds are dead | delete |
 | `derived-data` | `info.plist` → `WorkspacePath` gone = orphan (what `wt remove` leaves); `LastAccessedDate` | delete |
@@ -97,6 +97,7 @@ clones can overlap and the sum is not a reclaim promise.
 | `gradle-caches` `gradle-dists` | versions in `~/.gradle/caches/<v>` + `wrapper/dists` vs `gradle-wrapper.properties` under the scan roots | delete |
 | `gradle-jdks` | `~/.gradle/jdks` majors vs `jvmToolchain(..)` / `JavaLanguageVersion.of(..)` in build files (inconclusive → review) | delete |
 | `worktree-artifacts` | `git worktree list --porcelain` per repo under the scan roots; one finding per artifact dir inside each worktree — `.build`, `build/`, `DerivedData` (and `.derivedData`, `derived_data`), `Derived` (tuist), `SourcePackages`, `node_modules`, `Pods`, `.gradle`, `Carthage/{Build,Checkouts}`, `vendor/bundle`, at the root or one level down. `git check-ignore` decides: ignored → shared (stale past `stale_days`), else review + locked. The worktree itself is never touched — `wt` owns lifecycle. | delete the artifact dir |
+| `worktree-simulators` | per-task simulators that outlived their worktree: the name is not its device type's default name and does not embed it (`iPhone 16 Pro (iOS 18)` is a variant, not a task), and no live worktree dir, `<repo>.<name>` suffix or branch under the scan roots matches it — a longer name containing it counts as a match. Skipped entirely when the scan finds no worktrees, so an empty scan never condemns anything. The runtime stays, so `simctl create` remakes the device | `xcrun simctl delete <udid>` |
 | `orphan-derived-data` | DerivedData keyed to a vanished worktree path — report-only cross-reference (act via `derived-data`) | — |
 | `npm` `homebrew` | `~/.npm/_cacache`, `_npx`, pnpm store/cache, yarn, `~/.bun/install/cache`, Homebrew cache + logs — pure download caches → shared | delete |
 | `docker` `mise` `jetbrains` | colima/Docker/OrbStack disks (VM images → locked), mise (older versions → stale), JetBrains (older IDE builds → stale) | `mise uninstall`, delete |

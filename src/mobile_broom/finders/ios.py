@@ -40,6 +40,29 @@ def runtime_name(bundle_id: str) -> str:
     return f"{plat} {a}.{b}" + (f".{c}" if c else "")
 
 
+def platform_version(bundle_id: str) -> tuple[str, tuple[int, ...]]:
+    # com.apple.CoreSimulator.SimRuntime.iOS-26-4 -> ("iOS", (26, 4))
+    tail = bundle_id.rsplit(".", 1)[-1]
+    m = re.match(r"([A-Za-z]+)-([\d-]+)$", tail)
+    if not m:
+        return tail, ()
+    plat, ver = m.groups()
+    return plat, version_tuple(ver.replace("-", "."))
+
+
+def last_boot(d: dict) -> tuple:
+    """(when, signal) for a simulator device. Xcode 26+ simctl omits lastBootedAt;
+    launchd_sim rewrites data/var/run on every boot."""
+    last = d.get("lastBootedAt")
+    if last:
+        return last, "lastBootedAt"
+    if d.get("dataPath"):
+        run_dir = Path(d["dataPath"]) / "var" / "run"
+        if run_dir.exists():
+            return mtime_of(run_dir), "var/run mtime"
+    return None, "lastBootedAt"
+
+
 def load_images(env) -> list[dict]:
     """Images from images.plist (plistlib, no simctl). Falls back to simctl runtime list."""
     p = env.images_plist
@@ -159,24 +182,80 @@ def find_runtimes(env, cfg):
 
 @register("sim-devices")
 def find_sim_devices(env, cfg):
+    """Every device simctl knows, graded by how provably spare it is."""
     if not env.simctl_ok():
         yield _simctl_down("sim-devices", env)
         return
-    for d in env.simctl_devices():
-        if d.get("isAvailable", True):
+    devices = env.simctl_devices()
+    default_names = env.simctl_device_types()
+    newest: dict[str, tuple] = {}
+    for d in devices:
+        if not d.get("isAvailable", True):
             continue
+        plat, ver = platform_version(d.get("runtime", ""))
+        if ver and ver > newest.get(plat, ()):
+            newest[plat] = ver
+    for d in devices:
         rt = runtime_name(d.get("runtime", ""))
-        err = d.get("availabilityError") or "runtime not installed"
+        label = f"{d.get('name')} · {rt}"
+        paths = [d["dataPath"]] if d.get("dataPath") else []
+        extra = {"udid": d.get("udid"), "runtime": d.get("runtime")}
+        if not d.get("isAvailable", True):
+            err = d.get("availabilityError") or "runtime not installed"
+            yield Finding(
+                category="sim-devices",
+                group="ios",
+                label=label,
+                paths=paths,
+                size=d.get("dataPathSize", 0),
+                evidence=f"isAvailable=false: {err}",
+                verdict="dead",
+                action=Action(kind="argv", argv=["xcrun", "simctl", "delete", "unavailable"]),
+                extra=extra | {"adhoc": False, "superseded": False},
+            )
+            continue
+        last, src = last_boot(d)
+        if last is None and d.get("dataPath"):
+            # A device created and never booted still dates itself by its data dir.
+            last, src = mtime_of(d["dataPath"]), "data dir mtime"
+        used = f"last booted {when(last)} ({src})" if last else "no boot record"
+        default = default_names.get(d.get("deviceTypeIdentifier") or "")
+        adhoc = default is not None and d.get("name") != default
+        origin = f'custom name (device type default: "{default}")' if adhoc else "default name"
+        plat, ver = platform_version(d.get("runtime", ""))
+        superseded = bool(ver) and plat in newest and ver < newest[plat]
+        marks = [origin]
+        if superseded:
+            # The runtime is still installed, so the device is as usable as that runtime.
+            marks.append(
+                f"runtime older than the newest installed {plat} "
+                f"{'.'.join(str(n) for n in newest[plat])}"
+            )
+        age = age_days(last)
+        idle = age is not None and age > cfg.stale_days
+        action = Action(kind="argv", argv=["xcrun", "simctl", "delete", d["udid"]])
+        locked = None
+        if d.get("state") == "Booted":
+            verdict, action = "review", None
+            evidence = "; ".join(["BOOTED now", *marks, used])
+            locked = "device is booted; shut it down first"
+        elif idle:
+            verdict = "stale"
+            evidence = "; ".join([*marks, f"{used} — idle > {cfg.stale_days}d"])
+        else:
+            verdict = "review"
+            evidence = "; ".join([*marks, used])
         yield Finding(
             category="sim-devices",
             group="ios",
-            label=f"{d.get('name')} · {rt}",
-            paths=[d["dataPath"]] if d.get("dataPath") else [],
-            size=d.get("dataPathSize", 0),
-            evidence=f"isAvailable=false: {err}",
-            verdict="dead",
-            action=Action(kind="argv", argv=["xcrun", "simctl", "delete", "unavailable"]),
-            extra={"udid": d.get("udid"), "runtime": d.get("runtime")},
+            label=label,
+            paths=paths,
+            size=d.get("dataPathSize"),
+            evidence=evidence,
+            verdict=verdict,
+            action=action,
+            locked=locked,
+            extra=extra | {"adhoc": adhoc, "superseded": superseded, "state": d.get("state")},
         )
 
 
@@ -192,13 +271,7 @@ def find_sim_data(env, cfg):
         if size is not None and size < SIM_DATA_MIN:
             continue
         rt = runtime_name(d.get("runtime", ""))
-        last = d.get("lastBootedAt")
-        src = "lastBootedAt"
-        if not last and d.get("dataPath"):
-            # Xcode 26+ simctl omits lastBootedAt; launchd_sim rewrites data/var/run on every boot.
-            run_dir = Path(d["dataPath"]) / "var" / "run"
-            last = mtime_of(run_dir) if run_dir.exists() else None
-            src = "var/run mtime"
+        last, src = last_boot(d)
         state = d.get("state")
         age = age_days(last)
         used = f"last booted {when(last)} ({src})" if last else "no boot record"
