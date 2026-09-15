@@ -5,10 +5,15 @@ from __future__ import annotations
 
 import curses
 import io
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
 from .model import GROUPS, Finding, sort_key
+from .render import last_col
 from .sizer import Sizer, human
+
+TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
 
 ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
 # (key, what it does) — keys are drawn as highlighted chips so they stand out from the prose
@@ -29,6 +34,7 @@ LEGEND = [
     "[x] marked",
     "[-] locked — not removable; the bottom line says why",
     "…   size not computed yet (rescan in progress)",
+    "date column: last use/modification the verdict is based on, and its age in days",
 ]
 ICON = {
     actions.PENDING: "·",
@@ -51,6 +57,12 @@ def _put(scr, y, x, text, attr=0):
 
 def _size(n: int | None) -> str:
     return "   …  " if n is None else human(n)
+
+
+def _totals(fs: list[Finding]) -> str:
+    total = sum(f.size or 0 for f in fs)
+    dead = sum(f.size or 0 for f in fs if f.verdict == "dead")
+    return f"{human(total).strip()} total · dead {human(dead).strip()} · {len(fs)} findings"
 
 
 def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
@@ -86,6 +98,12 @@ class Browser:
         self.cur = self.off = 0
         self.msg = ""
         self.status = ""  # collecting/sizing progress shown in the header
+        self.loading = False  # a background scan is filling self.findings
+        self.anchor: str | None = None  # row key to keep the cursor on while rows shift
+        self._lock = threading.Lock()  # guards findings/marked/status/progress counters
+        self._thread: threading.Thread | None = None
+        self._errors: list[str] = []
+        self._prog = [0, 0, 0, 0]  # cats done, cats total, sized, to size
         self.colors = {}
         self.key_attr = curses.A_BOLD | curses.A_REVERSE
         if curses.has_colors():
@@ -108,49 +126,101 @@ class Browser:
 
     # -- collecting ------------------------------------------------------
     def collect(self, refresh: bool):
-        """Run finders one category at a time, then size one finding at a time, redrawing
-        after every step so the tree fills in and sizes replace the … indicators."""
-        cats = finders.resolve(self.selectors)
-        self.findings = []
-        for i, cat in enumerate(cats, 1):
-            self.status = f"collecting {i}/{len(cats)}: {cat}"
-            self.draw(self.rows())
-            self.findings.extend(finders.run([cat], self.env, self.cfg))
-            self.findings.sort(key=sort_key)
-        sizer = Sizer(refresh=refresh)
-        todo = sum(1 for f in self.findings if f.size is None and f.paths)
-
-        def sized(i, n, f):
-            self.status = f"sizing {i}/{n}"
-            self.draw(self.rows())
-
-        self.status = f"sizing 0/{todo}"
-        self.draw(self.rows())
-        sizer.size_findings(self.findings, progress=sized)
-        self.findings.sort(key=sort_key)
-        self.marked &= {f.key for f in self.findings}
-        self.status = ""
-        self.msg = f"{len(self.findings)} findings" + (
-            f" · {self.env.simctl_error}" if self.env.simctl_error else ""
+        """Start a background scan. Every category runs on its own worker: finder first, then
+        one sizing task per finding, so branches appear and fill in independently while the
+        loop keeps taking keys. `d` and `r` wait until the scan is done."""
+        if self.loading:
+            self.msg = "scan already running"
+            return
+        with self._lock:
+            self.findings = []
+            self._errors = []
+            self._prog = [0, 0, 0, 0]
+            self.loading = True
+            self.status = "starting…"
+        self._thread = threading.Thread(
+            target=self._collect_worker, args=(refresh,), daemon=True, name="mobile-broom-scan"
         )
+        self._thread.start()
+
+    def wait(self, timeout: float | None = None):
+        """Block until the running scan finishes (tests, and `act` after the scan)."""
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _collect_worker(self, refresh: bool):
+        cats = finders.resolve(self.selectors)
+        sizer = Sizer(refresh=refresh)
+        with self._lock:
+            self._prog[1] = len(cats)
+        self._set_status()
+        ex = ThreadPoolExecutor(max_workers=sizer.workers, thread_name_prefix="mobile-broom")
+        try:
+            cat_futs = [ex.submit(self._load_cat, cat, sizer, ex) for cat in cats]
+            size_futs: list[Future] = []
+            for fut in cat_futs:
+                size_futs.extend(fut.result())
+            for fut in size_futs:
+                fut.result()
+        finally:
+            ex.shutdown(wait=True)
+        sizer.save()
+        with self._lock:
+            self.marked &= {f.key for f in self.findings}
+            self.loading = False
+            self.status = ""
+            bits = [f"{len(self.findings)} findings"]
+            if self.env is not None and self.env.simctl_error:
+                bits.append(self.env.simctl_error)
+            bits.extend(self._errors)
+            self.msg = " · ".join(bits)
+
+    def _load_cat(self, cat: str, sizer: Sizer, ex: ThreadPoolExecutor) -> list[Future]:
+        """Run one finder, publish its findings, queue their sizing. Never blocks on sizing."""
+        try:
+            found = finders.run([cat], self.env, self.cfg)
+        except Exception as e:  # noqa: BLE001 - one broken finder must not kill the browser
+            found = []
+            with self._lock:
+                self._errors.append(f"{cat}: {e}")
+        todo = [f for f in found if f.size is None and f.paths]
+        with self._lock:
+            self.findings = sorted(self.findings + found, key=sort_key)
+            self._prog[0] += 1
+            self._prog[3] += len(todo)
+        self._set_status()
+        return [ex.submit(self._size_one, sizer, f) for f in todo]
+
+    def _size_one(self, sizer: Sizer, f: Finding):
+        try:
+            size = sizer.size_paths(f.paths)
+        except Exception:  # noqa: BLE001 - a single bad path must not kill the scan
+            size = 0
+        with self._lock:
+            f.size = size
+            self._prog[2] += 1
+            # keep verdict/size order stable for the rows the loop is drawing
+            self.findings = sorted(self.findings, key=sort_key)
+        self._set_status()
+
+    def _set_status(self):
+        with self._lock:
+            done, total, sized, to_size = self._prog
+            parts = [f"collecting {done}/{total}"]
+            if to_size:
+                parts.append(f"sizing {sized}/{to_size}")
+            self.status = " · ".join(parts)
 
     # -- rows ------------------------------------------------------------
     def rows(self) -> list[Row]:
         out: list[Row] = []
+        findings = self.findings  # one snapshot: the scan thread swaps the list, never mutates it
         for g in GROUPS:
-            gf = [f for f in self.findings if f.group == g]
+            gf = [f for f in findings if f.group == g]
             if not gf:
                 continue
-            gsize = sum(f.size or 0 for f in gf)
-            dead = sum(f.size or 0 for f in gf if f.verdict == "dead")
-            gpend = any(f.size is None for f in gf)
             out.append(
-                Row(
-                    "group",
-                    g,
-                    f"{g}  {human(gsize).strip()} total · dead {human(dead).strip()} · {len(gf)} findings",
-                    pending=gpend,
-                )
+                Row("group", g, f"{g}  {_totals(gf)}", pending=any(f.size is None for f in gf))
             )
             if g not in self.open:
                 continue
@@ -158,13 +228,12 @@ class Browser:
                 cf = [f for f in gf if f.category == cat]
                 if not cf:
                     continue
-                csize = sum(f.size or 0 for f in cf)
                 key = f"{g}/{cat}"
                 out.append(
                     Row(
                         "cat",
                         key,
-                        f"{cat}  {human(csize).strip()} · {len(cf)}",
+                        f"{cat}  {_totals(cf)}",
                         depth=1,
                         pending=any(f.size is None for f in cf),
                     )
@@ -179,9 +248,10 @@ class Browser:
         scr = self.scr
         scr.erase()
         h, _w = scr.getmaxyx()
-        marked = [f for f in self.findings if f.key in self.marked]
+        findings = self.findings
+        marked = [f for f in findings if f.key in self.marked]
         msize = sum(f.size or 0 for f in marked)
-        head = f"mobile-broom — {len(self.findings)} findings · marked {len(marked)} ({human(msize).strip()})"
+        head = f"mobile-broom — {len(findings)} findings · marked {len(marked)} ({human(msize).strip()})"
         if self.status:
             head += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
@@ -203,7 +273,7 @@ class Browser:
                 _put(scr, y, 0, f"{'>' if idx == self.cur else ' '} {indent}[{mark}] ", sel)
                 x = 2 + len(indent) + 4
                 _put(scr, y, x, f"{f.verdict:<6}", attr | sel)
-                _put(scr, y, x + 7, f"{_size(f.size)}  {f.label}", sel)
+                _put(scr, y, x + 7, f"{_size(f.size)}  {last_col(f.last)}  {f.label}", sel)
             else:
                 arrow = "▾" if row.key in self.open else "▸"
                 text = f"{'>' if idx == self.cur else ' '} {indent}{arrow} {row.label}"
@@ -340,54 +410,77 @@ class Browser:
         self.collect(refresh=self.refresh)
         while True:
             rows = self.rows()
-            if not rows:
+            if not rows and not self.loading:
                 self.show_text("nothing found", [], hints=[("any key", "quit")])
                 return
-            self.cur = max(0, min(self.cur, len(rows) - 1))
+            if self.anchor is not None:
+                # rows shifted under us (scan tick): stay on the same node, not the same index
+                self.cur = next((i for i, r in enumerate(rows) if r.key == self.anchor), self.cur)
+            self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
             self.draw(rows)
+            self.scr.timeout(TICK_MS if self.loading else -1)
             k = self.scr.getch()
-            row = rows[self.cur]
-            self.msg = ""
-            if k in (ord("q"), 27):
+            if k == -1:  # tick: nothing pressed, redraw with whatever the scan produced
+                self.anchor = rows[self.cur].key if rows else None
+                continue
+            self.anchor = None
+            if not self.handle_key(k, rows):
                 return
-            if k in (curses.KEY_UP, ord("k")):
-                self.cur -= 1
-            elif k in (curses.KEY_DOWN, ord("j")):
-                self.cur += 1
-            elif k == curses.KEY_NPAGE:
-                self.cur += 10
-            elif k == curses.KEY_PPAGE:
-                self.cur -= 10
-            elif k in ENTER_KEYS or k in (curses.KEY_RIGHT, ord("l")):
-                if row.kind != "finding":
-                    self.open.symmetric_difference_update({row.key})
-            elif k in (curses.KEY_LEFT, ord("h")):
-                if row.kind == "finding":
-                    parent = f"{row.finding.group}/{row.finding.category}"
-                    self.open.discard(parent)
-                    self.cur = next(i for i, r in enumerate(rows) if r.key == parent)
+
+    def handle_key(self, k: int, rows: list[Row]) -> bool:
+        """Apply one key to the browser state. Returns False to quit."""
+        self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
+        row = rows[self.cur] if rows else None
+        self.msg = ""
+        if k in (ord("q"), 27):
+            return False
+        if row is None:
+            return True
+        if k in (curses.KEY_UP, ord("k")):
+            self.cur -= 1
+        elif k in (curses.KEY_DOWN, ord("j")):
+            self.cur += 1
+        elif k == curses.KEY_NPAGE:
+            self.cur += 10
+        elif k == curses.KEY_PPAGE:
+            self.cur -= 10
+        elif k in ENTER_KEYS or k in (curses.KEY_RIGHT, ord("l")):
+            if row.kind != "finding":
+                self.open.symmetric_difference_update({row.key})
+        elif k in (curses.KEY_LEFT, ord("h")):
+            if row.kind == "finding":
+                parent = f"{row.finding.group}/{row.finding.category}"
+                self.open.discard(parent)
+                self.cur = next(i for i, r in enumerate(rows) if r.key == parent)
+            else:
+                self.open.discard(row.key)
+        elif k == ord(" "):
+            if row.kind == "finding":
+                if row.finding.action:
+                    self.marked.symmetric_difference_update({row.finding.key})
+                    self.cur += 1
                 else:
-                    self.open.discard(row.key)
-            elif k == ord(" "):
-                if row.kind == "finding":
-                    if row.finding.action:
-                        self.marked.symmetric_difference_update({row.finding.key})
-                        self.cur += 1
-                    else:
-                        self.msg = f"not removable: {row.finding.locked}"
-                else:
-                    self._toggle_all(row, lambda f: f.action is not None)
-            elif k == ord("a"):
-                target = row if row.kind != "finding" else None
-                self._toggle_all(target, lambda f: f.verdict == "dead" and f.action is not None)
-            elif k == ord("n"):
-                self.marked.clear()
-            elif k == ord("d"):
+                    self.msg = f"not removable: {row.finding.locked}"
+            else:
+                self._toggle_all(row, lambda f: f.action is not None)
+        elif k == ord("a"):
+            target = row if row.kind != "finding" else None
+            self._toggle_all(target, lambda f: f.verdict == "dead" and f.action is not None)
+        elif k == ord("n"):
+            self.marked.clear()
+        elif k == ord("d"):
+            if self.loading:
+                self.msg = "scan still running — wait for it before acting"
+            else:
                 self.confirm_and_act()
-            elif k == ord("r"):
+        elif k == ord("r"):
+            if self.loading:
+                self.msg = "scan already running"
+            else:
                 self.collect(refresh=True)
-            elif k == ord("?"):
-                self.show_keys()
+        elif k == ord("?"):
+            self.show_keys()
+        return True
 
     def _toggle_all(self, row, pred):
         if row is None:

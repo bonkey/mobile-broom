@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 
 VERDICTS = ("dead", "stale", "shared", "review")
 VERDICT_RANK = {v: i for i, v in enumerate(VERDICTS)}
@@ -73,9 +74,11 @@ class Finding:
     size: int | None = None
     action: Action | None = None
     locked: str | None = None  # why there is no action; required whenever action is None
+    last: datetime | None = None  # last use/modification the verdict was based on
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        self.last = as_utc(self.last)
         if self.verdict not in VERDICTS:
             raise ValueError(f"bad verdict {self.verdict!r} for {self.label}")
         if self.action is None and not self.locked:
@@ -98,6 +101,22 @@ class Finding:
         d["action"] = self.action.describe() if self.action else None
         d["action_kind"] = self.action.kind if self.action else None
         return d
+
+
+def as_utc(dt) -> datetime | None:
+    """Normalise a datetime / epoch / ISO string to an aware UTC datetime; None stays None."""
+    if dt is None:
+        return None
+    if isinstance(dt, (int, float)):
+        return datetime.fromtimestamp(dt, tz=UTC)
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 def sort_key(f: Finding):

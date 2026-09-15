@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from functools import cache
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class Env:
         self.simctl_error: str | None = None
         self._simctl_probed = False
         self._cache: dict = {}
+        self._lock = threading.RLock()  # finders run concurrently in the TUI
 
     # -- paths -----------------------------------------------------------
     def p(self, *parts: str) -> Path:
@@ -81,17 +83,18 @@ class Env:
     def run_json(self, argv: list[str], key: str | None = None):
         """Run argv, parse stdout as JSON; memoised per Env. Returns None on failure."""
         ck = tuple(argv)
-        if ck in self._cache:
-            return self._cache[ck]
-        out = self.run(argv)
-        val = None
-        if out.returncode == 0 and out.stdout.strip():
-            try:
-                val = json.loads(out.stdout)
-            except json.JSONDecodeError:
-                val = None
-        self._cache[ck] = val
-        return val
+        with self._lock:
+            if ck in self._cache:
+                return self._cache[ck]
+            out = self.run(argv)
+            val = None
+            if out.returncode == 0 and out.stdout.strip():
+                try:
+                    val = json.loads(out.stdout)
+                except json.JSONDecodeError:
+                    val = None
+            self._cache[ck] = val
+            return val
 
     def which(self, name: str) -> str | None:
         found = shutil.which(name, path=self.environ.get("PATH"))
@@ -112,7 +115,9 @@ class Env:
         """Probe CoreSimulatorService once. Under a restrictive sandbox simctl fails
         with 'Connection invalid' / 'Operation not permitted' and would otherwise
         look like 'no runtimes installed'."""
-        if not self._simctl_probed:
+        with self._lock:
+            if self._simctl_probed:
+                return self.simctl_error is None
             self._simctl_probed = True
             out = self.run(["xcrun", "simctl", "list", "runtimes", "--json"])
             if out.returncode != 0:

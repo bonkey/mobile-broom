@@ -6,6 +6,8 @@ import os
 import re
 from datetime import UTC, datetime
 
+from ..model import as_utc
+
 BUILD_RE = re.compile(r"^(\d+)([A-Z])(\d+)([a-z]*)$")
 
 
@@ -30,21 +32,6 @@ def version_tuple(v: str) -> tuple[int, ...]:
 
 def now() -> datetime:
     return datetime.now(UTC)
-
-
-def as_utc(dt) -> datetime | None:
-    if dt is None:
-        return None
-    if isinstance(dt, (int, float)):
-        return datetime.fromtimestamp(dt, tz=UTC)
-    if isinstance(dt, str):
-        try:
-            dt = datetime.fromisoformat(dt)
-        except ValueError:
-            return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt
 
 
 def age_days(dt) -> int | None:

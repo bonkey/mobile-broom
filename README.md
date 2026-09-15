@@ -10,12 +10,12 @@ never `sudo`.
 $ mobile-broom ios
 ios
   runtimes  (4, 32.9G)
-    dead     8.4G  iOS 27.0 (24A5370g)  — superseded by 24A5408d; last used 2026-07-22 (27d)
-    dead     8.0G  iOS 27.0 (24A5390f)  — superseded by 24A5408d; last used 2026-08-16 (3d)
-    review   8.5G  iOS 26.5 (23F77)     — newest iOS 26.5; last used 2026-08-19 (0d)
-    review   8.0G  iOS 27.0 (24A5408d)  — newest iOS 27.0; last used 2026-08-19 (0d); 2 older image(s) superseded
+    dead     8.4G  2026-07-22   27d  iOS 27.0 (24A5370g)  — superseded by 24A5408d; last used 2026-07-22 (27d)
+    dead     8.0G  2026-08-16    3d  iOS 27.0 (24A5390f)  — superseded by 24A5408d; last used 2026-08-16 (3d)
+    review   8.5G  2026-08-19    0d  iOS 26.5 (23F77)     — newest iOS 26.5; last used 2026-08-19 (0d)
+    review   8.0G  2026-08-19    0d  iOS 27.0 (24A5408d)  — newest iOS 27.0; last used 2026-08-19 (0d); 2 older image(s) superseded
   device-support  (8, 50.8G)
-    dead     7.0G  iOS iPhone18,4 27.0 (24A5390f)  — superseded by 27.0 (24A5408d) for iPhone18,4; modified 2026-07-30 (20d)
+    dead     7.0G  2026-07-30   20d  iOS iPhone18,4 27.0 (24A5390f)  — superseded by 27.0 (24A5408d) for iPhone18,4; modified 2026-07-30 (20d)
     ...
 candidates: dead 42.3G (6) · stale 5.9G (1) · shared 11.5G (10) · review 50.5G (11)
   (each path sized on its own; APFS clones may overlap — not a reclaim promise)
@@ -58,8 +58,11 @@ mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · space mark · `a` mark all dead in
 group · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `r` rescan · `?` keys · `q`.
 
-The tree fills in while finders run and sizes replace the `…` indicators one row at a time
-(same on `r`). `[-]` marks a finding that cannot be acted on; the bottom line says why
+The scan runs in the background, one worker per category: branches appear as their finder
+returns and sizes replace the `…` indicators one row at a time (same on `r`). You can move,
+expand and mark while it runs; `d` waits for the scan to finish. Every group and category
+row shows `total · dead · count`; every finding shows the date its verdict is based on
+(last use or modification) and its age in days. `[-]` marks a finding that cannot be acted on; the bottom line says why
 (`locked: device is booted; shut it down first`), and space on it repeats the reason. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
 it runs; `clean` prints the same one line per finding.

@@ -6,6 +6,7 @@ import shlex
 import sys
 import textwrap
 from collections import defaultdict
+from datetime import UTC, datetime
 
 from .model import GROUPS, VERDICTS, Finding
 from .sizer import human
@@ -13,6 +14,14 @@ from .sizer import human
 COLORS = {"dead": "\033[31m", "stale": "\033[33m", "shared": "\033[34m", "review": "\033[2m"}
 RESET = "\033[0m"
 BOLD = "\033[1m"
+
+
+def last_col(dt: datetime | None) -> str:
+    """'2026-07-17  33d' (16 cols) or blanks when the finder had no date."""
+    if dt is None:
+        return " " * 16
+    age = max(0, (datetime.now(UTC) - dt).days)
+    return f"{dt.date().isoformat()} {age:>4}d"
 
 
 def _c(verdict: str, text: str, color: bool) -> str:
@@ -52,16 +61,16 @@ def render(
                 totals[f.verdict] += f.size or 0
                 counts[f.verdict] += 1
                 tag = _c(f.verdict, f"{f.verdict:<6}", color)
-                head = f"    {tag} {human(f.size)}  {f.label}"
+                head = f"    {tag} {human(f.size)}  {last_col(f.last)}  {f.label}"
                 plain_len = len(head) - (len(COLORS[f.verdict]) + len(RESET) if color else 0)
                 ev = f.evidence
                 if not tty or plain_len + 3 + len(ev) <= width:
-                    pad = max(1, 48 - len(f.label)) if tty else 2
+                    pad = max(1, 44 - len(f.label)) if tty else 2
                     out.write(head + " " * pad + (f"— {ev}" if ev else "") + "\n")
                 else:
                     out.write(head + "\n")
                     for i, ln in enumerate(textwrap.wrap(ev, max(20, width - 20))):
-                        out.write(" " * 18 + ("— " if i == 0 else "  ") + ln + "\n")
+                        out.write(" " * 36 + ("— " if i == 0 else "  ") + ln + "\n")
                 if f.action and f.action.kind == "print":
                     out.write(f"           manual: {shlex.join(f.action.argv or [])}\n")
                 elif f.action is None:
