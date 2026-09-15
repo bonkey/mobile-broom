@@ -261,6 +261,15 @@ def test_key_hints_are_drawn_as_highlighted_chips(browser):
     assert b.key_attr & curses.A_REVERSE and b.key_attr & curses.A_BOLD
     descs = [t for y, t, a in scr.attrs if y == 1 and a == curses.A_DIM]
     assert " move" in descs and " quit" in descs
+    # a narrow terminal wraps the hints onto the spare line instead of cutting chips off
+    scr.attrs.clear()
+    scr.w = 60
+    b.draw(b.rows())
+    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y < 5]
+    assert [t for _y, t in chips] == [f" {k} " for k, _d in tui.HELP]
+    assert {y for y, _t in chips} == {1, 2, 3}
+    assert scr.lines[5].startswith("> ▾ ios")  # the tree starts below the wrapped hints
+    scr.w = 160
     scr.attrs.clear()
     b.show_keys()
     assert sum(1 for _y, _t, a in scr.attrs if a == b.key_attr) == len(tui.HELP) + 1
@@ -344,3 +353,34 @@ def test_reveal_reports_missing_path_and_spawns_open(monkeypatch, tmp_path):
     monkeypatch.setattr(tui.sys, "platform", "darwin")
     assert tui.reveal(str(tmp_path)) is None
     assert spawned == [["open", "-R", str(tmp_path)]]
+
+
+def test_s_cycles_sort_within_a_branch(browser):
+    b, scr = browser
+    old = datetime.now(UTC) - timedelta(days=300)
+    b.findings = sorted(
+        [
+            _dev("small-old", "iOS 27.0", 1, "review"),
+            _dev("big-new", "iOS 27.0", 9, "review"),
+            _dev("mid-dead", "iOS 27.0", 5, "dead"),
+        ],
+        key=tui.sort_key,
+    )
+    b.findings[[f.label for f in b.findings].index("small-old · iOS 27.0")].last = old
+    b.findings[[f.label for f in b.findings].index("big-new · iOS 27.0")].last = datetime.now(UTC)
+    b.open = {"ios", "ios/sim-devices"}
+
+    def labels():
+        return [r.finding.display_label for r in b.rows() if r.kind == "finding"]
+
+    assert labels() == ["mid-dead", "big-new", "small-old"]  # verdict, then size
+    rows = b.rows()
+    b.cur = 3
+    b.handle_key(ord("s"), rows)
+    assert labels() == ["big-new", "mid-dead", "small-old"] and b.anchor == rows[3].key
+    b.draw(b.rows())
+    assert "sort: size ↓" in scr.text()
+    b.handle_key(ord("s"), b.rows())
+    assert labels() == ["small-old", "big-new", "mid-dead"]  # oldest first, undated last
+    b.handle_key(ord("s"), b.rows())
+    assert labels() == ["mid-dead", "big-new", "small-old"]

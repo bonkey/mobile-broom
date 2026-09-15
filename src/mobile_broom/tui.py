@@ -12,11 +12,17 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
-from .model import GROUPS, Finding, bucket_key, sort_key
+from .model import GROUPS, VERDICT_RANK, Finding, bucket_key, sort_key
 from .render import last_col
 from .sizer import Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
+# `s` cycles these; each orders the findings inside a category / runtime heading
+SORTS = [
+    ("verdict", lambda f: (VERDICT_RANK[f.verdict], -(f.size or 0), f.label)),
+    ("size ↓", lambda f: (-(f.size or 0), f.label)),
+    ("date ↑", lambda f: ((0, f.last.timestamp()) if f.last else (1, 0.0), f.label)),
+]
 
 ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
 # (key, what it does) — keys are drawn as highlighted chips so they stand out from the prose
@@ -25,10 +31,11 @@ HELP = [
     ("→ ⏎", "expand"),
     ("← h", "collapse"),
     ("space", "mark"),
-    ("a", "mark dead in group"),
-    ("n", "unmark all"),
+    ("a", "mark dead"),
+    ("n", "unmark"),
     ("d", "act"),
-    ("o", "reveal in Finder"),
+    ("s", "sort"),
+    ("o", "reveal"),
     ("r", "rescan"),
     ("?", "keys"),
     ("q", "quit"),
@@ -70,20 +77,23 @@ def _totals(fs: list[Finding]) -> str:
 
 
 def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
-    """Draw `lead` then `[key] desc` pairs, keys as chips. Returns the x after the last one."""
+    """Draw `lead` then `[key] desc` pairs, keys as chips, wrapping to the next line when
+    the terminal is too narrow. Returns the y of the last line used."""
+    _h, w = scr.getmaxyx()
     if lead:
         _put(scr, y, x, lead, lead_attr)
         x += len(lead)
     for i, (key, desc) in enumerate(items):
         if i:
-            _put(scr, y, x, "  ", 0)
             x += 2
+        if x + len(key) + len(desc) + 4 > w:
+            y, x = y + 1, 0
         chip = f" {key} "
         _put(scr, y, x, chip, key_attr)
         x += len(chip)
         _put(scr, y, x, f" {desc}", curses.A_DIM)
         x += len(desc) + 1
-    return x
+    return y
 
 
 def reveal(path: str) -> str | None:
@@ -112,6 +122,7 @@ class Browser:
         self.findings: list[Finding] = []
         self.open: set[str] = set(GROUPS)  # groups open, categories collapsed
         self.closed: set[str] = set()  # buckets (e.g. one iOS version) are open unless closed
+        self.sort = 0  # index into SORTS
         self.marked: set[str] = set()
         self.cur = self.off = 0
         self.msg = ""
@@ -259,8 +270,12 @@ class Browser:
                 if key not in self.open:
                     continue
                 buckets = sorted({f.bucket for f in cf}, key=bucket_key)
+                order = SORTS[self.sort][1]
                 if buckets == [None]:
-                    out.extend(Row("finding", f.key, f.label, finding=f, depth=2) for f in cf)
+                    out.extend(
+                        Row("finding", f.key, f.label, finding=f, depth=2)
+                        for f in sorted(cf, key=order)
+                    )
                     continue
                 for b in buckets:
                     bf = [f for f in cf if f.bucket == b]
@@ -276,7 +291,10 @@ class Browser:
                     )
                     if bkey in self.closed:
                         continue
-                    out.extend(Row("finding", f.key, f.label, finding=f, depth=3) for f in bf)
+                    out.extend(
+                        Row("finding", f.key, f.label, finding=f, depth=3)
+                        for f in sorted(bf, key=order)
+                    )
         return out
 
     def is_open(self, row: Row) -> bool:
@@ -306,19 +324,22 @@ class Browser:
         findings = self.findings
         marked = [f for f in findings if f.key in self.marked]
         msize = sum(f.size or 0 for f in marked)
-        head = f"mobile-broom — {len(findings)} findings · marked {len(marked)} ({human(msize).strip()})"
+        head = (
+            f"mobile-broom — {len(findings)} findings · marked {len(marked)} "
+            f"({human(msize).strip()}) · sort: {SORTS[self.sort][0]}"
+        )
         if self.status:
             head += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
-        _hints(scr, 1, 0, HELP, self.key_attr)
-        body = max(1, h - 6)
+        top = _hints(scr, 1, 0, HELP, self.key_attr) + 2  # hints may wrap; tree starts below
+        body = max(1, h - top - 3)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
         self.off = min(self.off, self.cur)
         if self.cur >= self.off + body:
             self.off = self.cur - body + 1
         for i, row in enumerate(rows[self.off : self.off + body]):
             idx = self.off + i
-            y = 3 + i
+            y = top + i
             sel = curses.A_REVERSE if idx == self.cur else 0
             indent = "  " * row.depth
             if row.kind == "finding":
@@ -480,7 +501,7 @@ class Browser:
                 continue
             self.anchor = None
             if not self.handle_key(k, rows):
-                return
+                return  # handle_key may set a new anchor (sort) for the next pass
 
     def handle_key(self, k: int, rows: list[Row]) -> bool:
         """Apply one key to the browser state. Returns False to quit."""
@@ -528,6 +549,9 @@ class Browser:
                 self.msg = "scan still running — wait for it before acting"
             else:
                 self.confirm_and_act()
+        elif k == ord("s"):
+            self.sort = (self.sort + 1) % len(SORTS)
+            self.anchor = row.key  # same node, new position
         elif k == ord("o"):
             if row.kind != "finding" or not row.finding.paths:
                 self.msg = "nothing to reveal here — pick a finding with a path"
