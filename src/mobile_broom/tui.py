@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import curses
 import io
+import os
+import subprocess
+import sys
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
@@ -25,6 +28,7 @@ HELP = [
     ("a", "mark dead in group"),
     ("n", "unmark all"),
     ("d", "act"),
+    ("o", "reveal in Finder"),
     ("r", "rescan"),
     ("?", "keys"),
     ("q", "quit"),
@@ -80,6 +84,19 @@ def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
         _put(scr, y, x, f" {desc}", curses.A_DIM)
         x += len(desc) + 1
     return x
+
+
+def reveal(path: str) -> str | None:
+    """Show `path` in Finder (selected in its parent) or the desktop's file manager.
+    Returns an error message, or None."""
+    if not os.path.lexists(path):
+        return f"gone: {path}"
+    argv = ["open", "-R", path] if sys.platform == "darwin" else ["xdg-open", path]
+    try:
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        return f"cannot open {path}: {e}"
+    return None
 
 
 class Row:
@@ -511,6 +528,12 @@ class Browser:
                 self.msg = "scan still running — wait for it before acting"
             else:
                 self.confirm_and_act()
+        elif k == ord("o"):
+            if row.kind != "finding" or not row.finding.paths:
+                self.msg = "nothing to reveal here — pick a finding with a path"
+            else:
+                path = row.finding.paths[0]
+                self.msg = reveal(path) or f"revealed {path}"
         elif k == ord("r"):
             if self.loading:
                 self.msg = "scan already running"

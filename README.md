@@ -56,7 +56,7 @@ mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 ```
 
 TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · space mark · `a` mark all dead in
-group · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `r` rescan · `?` keys · `q`.
+group · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `o` reveal the finding's path in Finder · `r` rescan · `?` keys · `q`.
 
 The scan runs in the background, one worker per category: branches appear as their finder
 returns and sizes replace the `…` indicators one row at a time (same on `r`). You can move,

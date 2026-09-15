@@ -322,3 +322,25 @@ def test_sim_devices_are_grouped_by_runtime(browser):
     ]
     b.handle_key(curses.KEY_RIGHT, b.rows())
     assert "ios/sim-devices/iOS 26.0" not in b.closed
+
+
+def test_o_reveals_the_finding_path(browser, monkeypatch):
+    b, _scr = browser
+    calls = []
+    monkeypatch.setattr(tui, "reveal", lambda p: calls.append(p))
+    rows = b.rows()
+    b.cur = 0  # group row: nothing to reveal
+    b.handle_key(ord("o"), rows)
+    assert calls == [] and "nothing to reveal" in b.msg
+    b.cur = 4  # Dead-abc
+    b.handle_key(ord("o"), rows)
+    assert calls == ["/dd/Dead-abc"] and b.msg == "revealed /dd/Dead-abc"
+
+
+def test_reveal_reports_missing_path_and_spawns_open(monkeypatch, tmp_path):
+    assert tui.reveal(str(tmp_path / "nope")).startswith("gone: ")
+    spawned = []
+    monkeypatch.setattr(tui.subprocess, "Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr(tui.sys, "platform", "darwin")
+    assert tui.reveal(str(tmp_path)) is None
+    assert spawned == [["open", "-R", str(tmp_path)]]
