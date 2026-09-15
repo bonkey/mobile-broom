@@ -57,11 +57,18 @@ def render(
                 continue
             cat_total = sum(f.size or 0 for f in items)
             out.write(f"  {cat}  ({len(items)}, {human(cat_total).strip()})\n")
+            bucket = None
             for f in items:
+                if f.bucket and f.bucket != bucket:
+                    bucket = f.bucket
+                    bf = [x for x in items if x.bucket == bucket]
+                    bsize = human(sum(x.size or 0 for x in bf)).strip()
+                    out.write(f"    {bucket}  ({len(bf)}, {bsize})\n")
                 totals[f.verdict] += f.size or 0
                 counts[f.verdict] += 1
                 tag = _c(f.verdict, f"{f.verdict:<6}", color)
-                head = f"    {tag} {human(f.size)}  {last_col(f.last)}  {f.label}"
+                pre = "      " if f.bucket else "    "
+                head = f"{pre}{tag} {human(f.size)}  {last_col(f.last)}  {f.display_label}"
                 plain_len = len(head) - (len(COLORS[f.verdict]) + len(RESET) if color else 0)
                 ev = f.evidence
                 if not tty or plain_len + 3 + len(ev) <= width:

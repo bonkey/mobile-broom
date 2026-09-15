@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
-from .model import GROUPS, Finding, sort_key
+from .model import GROUPS, Finding, bucket_key, sort_key
 from .render import last_col
 from .sizer import Sizer, human
 
@@ -94,6 +94,7 @@ class Browser:
         self.refresh = refresh
         self.findings: list[Finding] = []
         self.open: set[str] = set(GROUPS)  # groups open, categories collapsed
+        self.closed: set[str] = set()  # buckets (e.g. one iOS version) are open unless closed
         self.marked: set[str] = set()
         self.cur = self.off = 0
         self.msg = ""
@@ -240,9 +241,46 @@ class Browser:
                 )
                 if key not in self.open:
                     continue
-                for f in cf:
-                    out.append(Row("finding", f.key, f.label, finding=f, depth=2))
+                buckets = sorted({f.bucket for f in cf}, key=bucket_key)
+                if buckets == [None]:
+                    out.extend(Row("finding", f.key, f.label, finding=f, depth=2) for f in cf)
+                    continue
+                for b in buckets:
+                    bf = [f for f in cf if f.bucket == b]
+                    bkey = f"{key}/{b}"
+                    out.append(
+                        Row(
+                            "bucket",
+                            bkey,
+                            f"{b}  {_totals(bf)}",
+                            depth=2,
+                            pending=any(f.size is None for f in bf),
+                        )
+                    )
+                    if bkey in self.closed:
+                        continue
+                    out.extend(Row("finding", f.key, f.label, finding=f, depth=3) for f in bf)
         return out
+
+    def is_open(self, row: Row) -> bool:
+        return row.key not in self.closed if row.kind == "bucket" else row.key in self.open
+
+    def toggle(self, row: Row):
+        if row.kind == "bucket":
+            self.closed.symmetric_difference_update({row.key})
+        else:
+            self.open.symmetric_difference_update({row.key})
+
+    def close(self, row: Row):
+        if row.kind == "bucket":
+            self.closed.add(row.key)
+        else:
+            self.open.discard(row.key)
+
+    @staticmethod
+    def parent_key(f: Finding) -> str:
+        key = f"{f.group}/{f.category}"
+        return f"{key}/{f.bucket}" if f.bucket else key
 
     def draw(self, rows):
         scr = self.scr
@@ -273,9 +311,9 @@ class Browser:
                 _put(scr, y, 0, f"{'>' if idx == self.cur else ' '} {indent}[{mark}] ", sel)
                 x = 2 + len(indent) + 4
                 _put(scr, y, x, f"{f.verdict:<6}", attr | sel)
-                _put(scr, y, x + 7, f"{_size(f.size)}  {last_col(f.last)}  {f.label}", sel)
+                _put(scr, y, x + 7, f"{_size(f.size)}  {last_col(f.last)}  {f.display_label}", sel)
             else:
-                arrow = "▾" if row.key in self.open else "▸"
+                arrow = "▾" if self.is_open(row) else "▸"
                 text = f"{'>' if idx == self.cur else ' '} {indent}{arrow} {row.label}"
                 if row.pending:
                     text += " …"
@@ -446,14 +484,14 @@ class Browser:
             self.cur -= 10
         elif k in ENTER_KEYS or k in (curses.KEY_RIGHT, ord("l")):
             if row.kind != "finding":
-                self.open.symmetric_difference_update({row.key})
+                self.toggle(row)
         elif k in (curses.KEY_LEFT, ord("h")):
             if row.kind == "finding":
-                parent = f"{row.finding.group}/{row.finding.category}"
-                self.open.discard(parent)
+                parent = self.parent_key(row.finding)
                 self.cur = next(i for i, r in enumerate(rows) if r.key == parent)
+                self.close(rows[self.cur])
             else:
-                self.open.discard(row.key)
+                self.close(row)
         elif k == ord(" "):
             if row.kind == "finding":
                 if row.finding.action:
@@ -487,6 +525,9 @@ class Browser:
             pool = self.findings
         elif row.kind == "group":
             pool = [f for f in self.findings if f.group == row.key]
+        elif row.kind == "bucket":
+            g, c, b = row.key.split("/", 2)
+            pool = [f for f in self.findings if (f.group, f.category, f.bucket) == (g, c, b)]
         else:
             g, c = row.key.split("/", 1)
             pool = [f for f in self.findings if f.group == g and f.category == c]

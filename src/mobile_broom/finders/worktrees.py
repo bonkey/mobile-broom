@@ -260,6 +260,7 @@ def find_worktree_simulators(env, cfg):
             category="worktree-simulators",
             group="worktrees",
             label=f"{name} · {rt}",
+            bucket=rt,
             paths=[d["dataPath"]] if d.get("dataPath") else [],
             size=d.get("dataPathSize"),
             evidence="; ".join(bits),

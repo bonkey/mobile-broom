@@ -62,7 +62,9 @@ The scan runs in the background, one worker per category: branches appear as the
 returns and sizes replace the `…` indicators one row at a time (same on `r`). You can move,
 expand and mark while it runs; `d` waits for the scan to finish. Every group and category
 row shows `total · dead · count`; every finding shows the date its verdict is based on
-(last use or modification) and its age in days. `[-]` marks a finding that cannot be acted on; the bottom line says why
+(last use or modification) and its age in days. Simulator categories (`sim-devices`,
+`sim-data`, `worktree-simulators`) group their devices under one heading per runtime,
+newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the bottom line says why
 (`locked: device is booted; shut it down first`), and space on it repeats the reason. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
 it runs; `clean` prints the same one line per finding.

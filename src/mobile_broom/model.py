@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
@@ -75,6 +76,7 @@ class Finding:
     action: Action | None = None
     locked: str | None = None  # why there is no action; required whenever action is None
     last: datetime | None = None  # last use/modification the verdict was based on
+    bucket: str | None = None  # sub-heading inside the category (sim devices: their runtime)
     extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -95,6 +97,14 @@ class Finding:
     @property
     def key(self) -> str:
         return f"{self.category}:{self.label}"
+
+    @property
+    def display_label(self) -> str:
+        """The label without a trailing ` · <bucket>` — redundant under the bucket heading."""
+        tail = f" · {self.bucket}" if self.bucket else ""
+        if tail and self.label.endswith(tail):
+            return self.label[: -len(tail)]
+        return self.label
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -119,11 +129,26 @@ def as_utc(dt) -> datetime | None:
     return dt
 
 
+_BUCKET_VER = re.compile(r"^(.*?)\s*(\d+(?:\.\d+)*)$")
+
+
+def bucket_key(bucket: str | None) -> tuple:
+    """Order buckets: unbucketed last, else by platform then newest version first."""
+    if bucket is None:
+        return (1, "", ())
+    m = _BUCKET_VER.match(bucket)
+    if not m:
+        return (0, bucket, ())
+    name, ver = m.groups()
+    return (0, name, tuple(-int(n) for n in ver.split(".")))
+
+
 def sort_key(f: Finding):
     groups = list(GROUPS)
     return (
         groups.index(f.group),
         GROUPS[f.group].index(f.category),
+        bucket_key(f.bucket),
         VERDICT_RANK[f.verdict],
         -(f.size or 0),
         f.label,

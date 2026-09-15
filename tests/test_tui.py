@@ -264,3 +264,61 @@ def test_key_hints_are_drawn_as_highlighted_chips(browser):
     scr.attrs.clear()
     b.show_keys()
     assert sum(1 for _y, _t, a in scr.attrs if a == b.key_attr) == len(tui.HELP) + 1
+
+
+def _dev(name, rt, size, verdict="review"):
+    return Finding(
+        "sim-devices",
+        "ios",
+        f"{name} · {rt}",
+        [f"/sim/{name}-{rt}"],
+        "e",
+        verdict,
+        size=size,
+        bucket=rt,
+        action=Action("argv", argv=["xcrun", "simctl", "delete", name]),
+    )
+
+
+def test_sim_devices_are_grouped_by_runtime(browser):
+    """Buckets sort newest first, open by default, carry totals, and fold with ← / mark with space."""
+    b, scr = browser
+    b.findings = sorted(
+        [
+            _dev("iPhone 17", "iOS 26.0", 3),
+            _dev("iPhone 17", "iOS 27.0", 5, "dead"),
+            _dev("iPad", "iOS 27.0", 4),
+            _dev("Apple Watch", "watchOS 12.0", 1),
+        ],
+        key=tui.sort_key,
+    )
+    b.open = {"ios", "ios/sim-devices"}
+    rows = b.rows()
+    assert [(r.kind, r.key) for r in rows] == [
+        ("group", "ios"),
+        ("cat", "ios/sim-devices"),
+        ("bucket", "ios/sim-devices/iOS 27.0"),
+        ("finding", "sim-devices:iPhone 17 · iOS 27.0"),
+        ("finding", "sim-devices:iPad · iOS 27.0"),
+        ("bucket", "ios/sim-devices/iOS 26.0"),
+        ("finding", "sim-devices:iPhone 17 · iOS 26.0"),
+        ("bucket", "ios/sim-devices/watchOS 12.0"),
+        ("finding", "sim-devices:Apple Watch · watchOS 12.0"),
+    ]
+    b.draw(rows)
+    txt = scr.text()
+    assert "▾ iOS 27.0  9B total · dead 5B · 2 findings" in txt
+    assert "iPhone 17\n" in txt + "\n" and "iPhone 17 · iOS 27.0" not in txt  # suffix folded
+    # space on the bucket marks everything in it; ← on a finding folds its bucket
+    b.cur = 2
+    b.handle_key(ord(" "), rows)
+    assert b.marked == {"sim-devices:iPhone 17 · iOS 27.0", "sim-devices:iPad · iOS 27.0"}
+    b.cur = 6
+    b.handle_key(curses.KEY_LEFT, rows)
+    assert b.cur == 5 and "ios/sim-devices/iOS 26.0" in b.closed
+    assert [r.key for r in b.rows()][5:7] == [
+        "ios/sim-devices/iOS 26.0",
+        "ios/sim-devices/watchOS 12.0",
+    ]
+    b.handle_key(curses.KEY_RIGHT, b.rows())
+    assert "ios/sim-devices/iOS 26.0" not in b.closed
