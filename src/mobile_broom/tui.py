@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from . import actions, finders
 from .model import GROUPS, VERDICT_RANK, Finding, bucket_key, sort_key
 from .render import last_col
-from .sizer import Sizer, human
+from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
 # `s` cycles these; each orders the findings inside a category / runtime heading
@@ -131,6 +131,7 @@ class Browser:
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
         self._lock = threading.Lock()  # guards findings/marked/status/progress counters
         self._thread: threading.Thread | None = None
+        self._stop = threading.Event()  # set on quit: workers bail out, walks abandon
         self._errors: list[str] = []
         self._prog = [0, 0, 0, 0]  # cats done, cats total, sized, to size
         self.colors = {}
@@ -167,6 +168,7 @@ class Browser:
             self._prog = [0, 0, 0, 0]
             self.loading = True
             self.status = "starting…"
+        self._stop.clear()
         self._thread = threading.Thread(
             target=self._collect_worker, args=(refresh,), daemon=True, name="mobile-broom-scan"
         )
@@ -177,9 +179,27 @@ class Browser:
         if self._thread is not None:
             self._thread.join(timeout)
 
+    def stop(self, timeout: float = 10.0):
+        """Abandon a running scan: queued tasks are dropped, walks in flight bail at their next
+        directory, and the scan thread is joined so the interpreter has nothing left to wait
+        for after curses hands the terminal back."""
+        self._stop.set()
+        self.wait(timeout)
+
     def _collect_worker(self, refresh: bool):
+        try:
+            self._collect(refresh)
+        except Exception as e:  # noqa: BLE001 - never let a scan take the process down
+            with self._lock:
+                self.msg = f"scan failed: {e!r}"
+        finally:
+            with self._lock:
+                self.loading = False
+                self.status = ""
+
+    def _collect(self, refresh: bool):
         cats = finders.resolve(self.selectors)
-        sizer = Sizer(refresh=refresh)
+        sizer = Sizer(refresh=refresh, stop=self._stop.is_set)
         with self._lock:
             self._prog[1] = len(cats)
         self._set_status()
@@ -192,8 +212,10 @@ class Browser:
             for fut in size_futs:
                 fut.result()
         finally:
-            ex.shutdown(wait=True)
-        sizer.save()
+            ex.shutdown(wait=True, cancel_futures=self._stop.is_set())
+        sizer.save()  # whatever was sized before a stop is still a valid cache entry
+        if self._stop.is_set():
+            return
         with self._lock:
             self.marked &= {f.key for f in self.findings}
             self.loading = False
@@ -206,6 +228,8 @@ class Browser:
 
     def _load_cat(self, cat: str, sizer: Sizer, ex: ThreadPoolExecutor) -> list[Future]:
         """Run one finder, publish its findings, queue their sizing. Never blocks on sizing."""
+        if self._stop.is_set():
+            return []
         try:
             found = finders.run([cat], self.env, self.cfg)
         except Exception as e:  # noqa: BLE001 - one broken finder must not kill the browser
@@ -221,8 +245,12 @@ class Browser:
         return [ex.submit(self._size_one, sizer, f) for f in todo]
 
     def _size_one(self, sizer: Sizer, f: Finding):
+        if self._stop.is_set():
+            return
         try:
             size = sizer.size_paths(f.paths)
+        except Cancelled:
+            return
         except Exception:  # noqa: BLE001 - a single bad path must not kill the scan
             size = 0
         with self._lock:
@@ -589,7 +617,11 @@ def run(selectors, env, cfg, refresh=False) -> int:
     import sys
 
     def main(scr):
-        Browser(scr, env, cfg, selectors, refresh=refresh).loop()
+        b = Browser(scr, env, cfg, selectors, refresh=refresh)
+        try:
+            b.loop()
+        finally:
+            b.stop()  # q or ^C mid-scan: drop queued work and join before curses returns
 
     try:
         curses.wrapper(main)

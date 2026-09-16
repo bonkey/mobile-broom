@@ -19,8 +19,13 @@ CACHE_FILE = "sizes.json"
 BLOCK = 512
 
 
-def walk_size(root: str | os.PathLike, honour_cachedir_tag: bool = False) -> int:
-    """Allocated bytes under root. Never follows symlinks, never crosses st_dev."""
+class Cancelled(Exception):
+    """A walk was abandoned because its `stop` callable returned True."""
+
+
+def walk_size(root: str | os.PathLike, honour_cachedir_tag: bool = False, stop=None) -> int:
+    """Allocated bytes under root. Never follows symlinks, never crosses st_dev.
+    `stop()` is polled once per directory; True raises Cancelled (the TUI quitting)."""
     root = os.fspath(root)
     try:
         st = os.lstat(root)
@@ -32,6 +37,8 @@ def walk_size(root: str | os.PathLike, honour_cachedir_tag: bool = False) -> int
     total = st.st_blocks * BLOCK
     stack = [root]
     while stack:
+        if stop is not None and stop():
+            raise Cancelled(root)
         d = stack.pop()
         try:
             it = os.scandir(d)
@@ -62,9 +69,14 @@ def dir_mtime(path: str) -> float:
 
 class Sizer:
     def __init__(
-        self, refresh: bool = False, workers: int | None = None, cache_path: Path | None = None
+        self,
+        refresh: bool = False,
+        workers: int | None = None,
+        cache_path: Path | None = None,
+        stop=None,
     ):
         self.refresh = refresh
+        self.stop = stop  # polled while walking; True abandons the walk with Cancelled
         self.workers = workers or min(8, os.cpu_count() or 4)
         self.cache_path = cache_path or (config.config_dir() / CACHE_FILE)
         self._cache: dict[str, dict] = {}
@@ -80,7 +92,7 @@ class Sizer:
         hit = self._cache.get(path)
         if hit and not self.refresh and hit.get("mtime") == mt:
             return int(hit["size"])
-        size = walk_size(path)
+        size = walk_size(path, stop=self.stop)
         self._cache[path] = {"mtime": mt, "size": size, "at": time.time()}
         self._dirty = True
         return size

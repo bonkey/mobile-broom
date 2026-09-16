@@ -160,7 +160,7 @@ def test_scan_runs_in_background_and_keys_work_meanwhile(browser, monkeypatch):
     class FakeSizer:
         workers = 2
 
-        def __init__(self, refresh=False):
+        def __init__(self, refresh=False, stop=None):
             pass
 
         def size_paths(self, paths):
@@ -225,7 +225,7 @@ def test_broken_finder_is_reported_not_fatal(browser, monkeypatch):
     class FakeSizer:
         workers = 1
 
-        def __init__(self, refresh=False):
+        def __init__(self, refresh=False, stop=None):
             pass
 
         def save(self):
@@ -384,3 +384,51 @@ def test_s_cycles_sort_within_a_branch(browser):
     assert labels() == ["small-old", "big-new", "mid-dead"]  # oldest first, undated last
     b.handle_key(ord("s"), b.rows())
     assert labels() == ["mid-dead", "big-new", "small-old"]
+
+
+def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
+    """Finder B never returns on its own: it polls the stop flag. `q` → stop() sets it, drops the
+    queued sizing tasks, and joins the scan thread before the loop returns."""
+    b, scr = browser
+    b.findings = []
+    started = threading.Event()
+    sized = []
+
+    def fake_run(cats, env, cfg):
+        (cat,) = cats
+        if cat == "derived-data":
+            return [_finding("derived-data", "ios", f"dd-{i}") for i in range(20)]
+        started.set()
+        while not b._stop.is_set():
+            threading.Event().wait(0.005)
+        return [_finding("npm", "general", "late")]
+
+    class SlowSizer:
+        workers = 2
+
+        def __init__(self, refresh=False, stop=None):
+            self.stop = stop
+
+        def size_paths(self, paths):
+            for _ in range(200):  # a long walk that polls stop like walk_size does
+                if self.stop():
+                    raise tui.Cancelled(paths[0])
+                threading.Event().wait(0.002)
+            sized.append(paths[0])
+            return 1
+
+        def save(self):
+            pass
+
+    monkeypatch.setattr(finders, "resolve", lambda sel: ["derived-data", "npm"])
+    monkeypatch.setattr(finders, "run", fake_run)
+    monkeypatch.setattr(tui, "Sizer", SlowSizer)
+    scr.getch = lambda: (started.wait(5), ord("q"))[1]  # press q once B is mid-flight
+    t0 = datetime.now(UTC)
+    b.loop()
+    b.stop()
+    assert started.is_set()
+    assert not b._thread.is_alive()
+    assert (datetime.now(UTC) - t0).total_seconds() < 3  # not 20 walks × 0.4s
+    assert len(sized) < 20 and not b.loading
+    assert threading.active_count() == 1

@@ -1,8 +1,9 @@
 import os
 
+import pytest
 from conftest import mkfile
 
-from mobile_broom.sizer import Sizer, human, walk_size
+from mobile_broom.sizer import Cancelled, Sizer, human, walk_size
 
 
 def test_walk_size_counts_allocated_bytes_and_skips_symlinks(tmp_path):
@@ -77,3 +78,11 @@ def test_human():
     assert human(None).strip() == "?"
     assert human(8_389_757_281).strip() == "8.4G"
     assert human(512).strip() == "512B"
+
+
+def test_walk_size_stop_raises_cancelled(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f").write_bytes(b"x" * 10)
+    assert walk_size(tmp_path, stop=lambda: False) > 0
+    with pytest.raises(Cancelled):
+        walk_size(tmp_path, stop=lambda: True)
