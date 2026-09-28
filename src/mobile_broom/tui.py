@@ -70,10 +70,12 @@ def _size(n: int | None) -> str:
     return "   …  " if n is None else human(n)
 
 
-def _totals(fs: list[Finding]) -> str:
+def _totals(fs: list[Finding], marked: set[str]) -> str:
     total = sum(f.size or 0 for f in fs)
     dead = sum(f.size or 0 for f in fs if f.verdict == "dead")
-    return f"{human(total).strip()} total · dead {human(dead).strip()} · {len(fs)} findings"
+    picked = [f for f in fs if f.key in marked]
+    mark = f" · marked {human(sum(f.size or 0 for f in picked)).strip()}" if picked else ""
+    return f"{human(total).strip()} total · dead {human(dead).strip()}{mark} · {len(fs)} findings"
 
 
 def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
@@ -136,6 +138,7 @@ class Browser:
         self._prog = [0, 0, 0, 0]  # cats done, cats total, sized, to size
         self.colors = {}
         self.key_attr = curses.A_BOLD | curses.A_REVERSE
+        self.mark_attr = curses.A_BOLD | curses.A_REVERSE
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
@@ -153,6 +156,7 @@ class Browser:
                 self.colors[v] = curses.color_pair(i)
             self.colors["review"] = curses.A_DIM
             self.key_attr = self.colors["key"] | curses.A_BOLD | curses.A_REVERSE
+            self.mark_attr = self.colors["stale"] | curses.A_BOLD | curses.A_REVERSE
 
     # -- collecting ------------------------------------------------------
     def collect(self, refresh: bool):
@@ -277,7 +281,12 @@ class Browser:
             if not gf:
                 continue
             out.append(
-                Row("group", g, f"{g}  {_totals(gf)}", pending=any(f.size is None for f in gf))
+                Row(
+                    "group",
+                    g,
+                    f"{g}  {_totals(gf, self.marked)}",
+                    pending=any(f.size is None for f in gf),
+                )
             )
             if g not in self.open:
                 continue
@@ -290,7 +299,7 @@ class Browser:
                     Row(
                         "cat",
                         key,
-                        f"{cat}  {_totals(cf)}",
+                        f"{cat}  {_totals(cf, self.marked)}",
                         depth=1,
                         pending=any(f.size is None for f in cf),
                     )
@@ -312,7 +321,7 @@ class Browser:
                         Row(
                             "bucket",
                             bkey,
-                            f"{b}  {_totals(bf)}",
+                            f"{b}  {_totals(bf, self.marked)}",
                             depth=2,
                             pending=any(f.size is None for f in bf),
                         )
@@ -352,13 +361,14 @@ class Browser:
         findings = self.findings
         marked = [f for f in findings if f.key in self.marked]
         msize = sum(f.size or 0 for f in marked)
-        head = (
-            f"mobile-broom — {len(findings)} findings · marked {len(marked)} "
-            f"({human(msize).strip()}) · sort: {SORTS[self.sort][0]}"
-        )
+        head = f"mobile-broom — {len(findings)} findings · "
+        chip = f" marked {len(marked)} · {human(msize).strip()} "
+        tail = f" · sort: {SORTS[self.sort][0]}"
         if self.status:
-            head += f"   ⟳ {self.status}"
+            tail += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
+        _put(scr, 0, len(head), chip, self.mark_attr)
+        _put(scr, 0, len(head) + len(chip), tail, curses.A_BOLD)
         top = _hints(scr, 1, 0, HELP, self.key_attr) + 2  # hints may wrap; tree starts below
         body = max(1, h - top - 3)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))

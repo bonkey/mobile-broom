@@ -265,7 +265,7 @@ def test_key_hints_are_drawn_as_highlighted_chips(browser):
     scr.attrs.clear()
     scr.w = 60
     b.draw(b.rows())
-    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y < 5]
+    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and 0 < y < 5]
     assert [t for _y, t in chips] == [f" {k} " for k, _d in tui.HELP]
     assert {y for y, _t in chips} == {1, 2, 3}
     assert scr.lines[5].startswith("> ▾ ios")  # the tree starts below the wrapped hints
@@ -432,3 +432,18 @@ def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
     assert (datetime.now(UTC) - t0).total_seconds() < 3  # not 20 walks × 0.4s
     assert len(sized) < 20 and not b.loading
     assert threading.active_count() == 1
+
+
+def test_marked_size_shows_in_tree_rows_and_header_chip(browser):
+    b, scr = browser
+    b.draw(b.rows())
+    assert "marked" not in scr.lines[3]  # nothing marked → rows stay as they were
+    b.marked = {"derived-data:Dead-abc"}
+    scr.attrs.clear()
+    b.draw(b.rows())
+    txt = scr.text()
+    assert "ios  15B total · dead 10B · marked 10B · 2 findings" in txt
+    assert "derived-data  10B total · dead 10B · marked 10B · 1 findings" in txt
+    assert "sim-data  5B total · dead 0B · 1 findings" in txt
+    chip = next((t, a) for y, t, a in scr.attrs if y == 0 and "marked" in t)
+    assert chip[0] == " marked 1 · 10B " and chip[1] & curses.A_REVERSE
