@@ -119,13 +119,17 @@ def _footer(w: int) -> list[tuple[str, str]]:
 
 
 def _disk_line(usage: tuple[int, int], marked: int, w: int) -> list[tuple[str, str]]:
-    """'disk  ███▒░░  52% used · 475.9G free of 994.6G → up to 484.3G after marked' as
-    (text, part) pieces that fit `w`. The projection shows only while something is marked and
-    says "up to": marked sizes are candidates, and clones or shared files can free less.
+    """'disk  [used][:::]......  52% used · 475.9G free of 994.6G → up to 484.3G after marked'
+    as (text, part) pieces that fit `w`. The bar is ASCII only: draw_disk shows used as
+    reversed spaces and marked as reversed ':'. A run of one non-ASCII character would let
+    ncurses send it with terminfo `rep`, and macOS's ncurses 6.0 then sends only its low byte,
+    which a terminal shows as one invalid character per cell. The projection shows only while
+    something is marked and says "up to": marked sizes are candidates, and clones or shared
+    files can free less.
     Narrow terminals shrink the bar first, then drop 'of <total>', then shorten the projection
-    to '→ ≤484.3G', then the bar shrinks away. ▒ is the marked part of the used space, so it
-    ends where the projected free space begins. It is at least one cell, so a mark shows on a
-    large disk."""
+    to '→ ≤484.3G', then the bar shrinks away. The marked part is carved from the used part,
+    so it ends where the projected free space begins. It is at least one cell, so a mark shows
+    on a large disk."""
     free, total = usage
     used = total - free
     marked = min(marked, used)
@@ -143,9 +147,9 @@ def _disk_line(usage: tuple[int, int], marked: int, w: int) -> list[tuple[str, s
     m = max(1, u - round(cells * (used - marked) / total)) if marked and u else 0
     return [
         ("disk  ", "label"),
-        ("█" * (u - m), "used"),
-        ("▒" * m, "marked"),
-        ("░" * (cells - u), "free"),
+        (" " * (u - m), "used"),
+        (":" * m, "marked"),
+        ("." * (cells - u), "free"),
         (("  " if cells else "") + text, "text"),
     ]
 
@@ -459,7 +463,7 @@ class Browser:
                 if row.pending:
                     text += " …"
                 _put(scr, y, 0, text, sel | (curses.A_BOLD if row.kind == "group" else 0))
-        _put(scr, h - 5, 0, "─" * w, curses.A_DIM)
+        _put(scr, h - 5, 0, "-" * w, curses.A_DIM)  # ASCII: see _disk_line on `rep`
         # detail: evidence · action-or-lock · message · keys
         if rows and rows[self.cur].kind == "finding":
             f = rows[self.cur].finding
@@ -474,14 +478,16 @@ class Browser:
         scr.refresh()
 
     def draw_disk(self, y: int, usage: tuple[int, int], marked: int):
-        """The disk bar. The used part is green below 80% full, yellow below 90%, red above;
-        the glyphs alone still tell used, marked and free apart without colour."""
+        """The disk bar: used is a solid reversed block, green below 80% full, yellow below
+        90%, red above; marked is a reversed ':' block; free is a dim dotted track. Without
+        colour the three still read apart."""
         free, total = usage
         full = (total - free) / total
         attrs = {
             "label": curses.A_BOLD,
-            "used": self.colors.get("ok" if full < 0.8 else "stale" if full < 0.9 else "dead", 0),
-            "marked": curses.A_BOLD,
+            "used": curses.A_REVERSE
+            | self.colors.get("ok" if full < 0.8 else "stale" if full < 0.9 else "dead", 0),
+            "marked": curses.A_BOLD | curses.A_REVERSE,
             "free": curses.A_DIM,
             "text": 0,
         }

@@ -2,7 +2,15 @@
 and the background scan that fills the tree while keys keep working."""
 
 import curses
+import fcntl
+import os
+import re
+import select
+import shutil
+import struct
 import subprocess
+import sys
+import termios
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -341,7 +349,7 @@ def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
     assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc"
     assert scr.lines[bottom - 2] == "  delete /dd/Dead-abc"
     assert scr.lines[bottom - 3] == "— orphan"
-    assert scr.lines[bottom - 4] == "─" * (scr.w - 1)
+    assert scr.lines[bottom - 4] == "-" * (scr.w - 1)
     assert scr.lines[3].startswith("  ▾ ios")  # tree below title, disk bar and a blank line
     for w, keys in (
         (95, tui.FOOTER),
@@ -555,31 +563,31 @@ def test_disk_line_segments_and_percentage_without_marks():
     line = tui._disk_line((400 * G, 1000 * G), 0, 120)
     assert line == [
         ("disk  ", "label"),
-        ("█" * 24, "used"),
+        (" " * 24, "used"),
         ("", "marked"),
-        ("░" * 16, "free"),
+        ("." * 16, "free"),
         ("  60% used · 400.0G free of 1.0T", "text"),
     ]
 
 
 def test_disk_line_projects_free_space_after_marked_as_up_to():
-    """▒ is the marked part of the used space; the text projects free + marked as "up to",
-    capped at the disk total. Nothing marked: no projection, no ▒."""
+    """':' is the marked part of the used space; the text projects free + marked as "up to",
+    capped at the disk total. Nothing marked: no projection, no ':'."""
 
     def line(marked):
         parts = tui._disk_line((400 * G, 1000 * G), marked, 120)
         return "".join(t for t, part in parts if part in ("used", "marked", "free")), parts[-1][0]
 
-    assert line(0) == ("█" * 24 + "░" * 16, "  60% used · 400.0G free of 1.0T")
+    assert line(0) == (" " * 24 + "." * 16, "  60% used · 400.0G free of 1.0T")
     assert line(100 * G) == (
-        "█" * 20 + "▒" * 4 + "░" * 16,
+        " " * 20 + ":" * 4 + "." * 16,
         "  60% used · 400.0G free of 1.0T → up to 500.0G after marked",
     )
     assert line(700 * G) == (  # more than is used: capped at the disk total
-        "▒" * 24 + "░" * 16,
+        ":" * 24 + "." * 16,
         "  60% used · 400.0G free of 1.0T → up to 1.0T after marked",
     )
-    assert line(10)[0] == "█" * 23 + "▒" + "░" * 16  # a tiny mark still shows
+    assert line(10)[0] == " " * 23 + ":" + "." * 16  # a tiny mark still shows
 
 
 def test_disk_line_degrades_bar_then_total_then_projection_then_bar():
@@ -588,15 +596,15 @@ def test_disk_line_degrades_bar_then_total_then_projection_then_bar():
         assert len(text) <= w - 1  # never wraps, never needs clipping
         return text
 
-    assert fit(200) == "disk  " + "█" * 24 + "░" * 16 + "  60% used · 400.0G free of 1.0T"
-    assert fit(60) == "disk  " + "█" * 13 + "░" * 8 + "  60% used · 400.0G free of 1.0T"
-    assert fit(48) == "disk  " + "█" * 10 + "░" * 7 + "  60% used · 400.0G free"
+    assert fit(200) == "disk  " + " " * 24 + "." * 16 + "  60% used · 400.0G free of 1.0T"
+    assert fit(60) == "disk  " + " " * 13 + "." * 8 + "  60% used · 400.0G free of 1.0T"
+    assert fit(48) == "disk  " + " " * 10 + "." * 7 + "  60% used · 400.0G free"
     assert fit(30) == "disk  60% used · 400.0G free"
     m = 100 * G
     assert fit(80, m).endswith("  60% used · 400.0G free of 1.0T → up to 500.0G after marked")
-    assert fit(80, m).count("▒") == 2  # the bar shrank first
-    assert fit(70, m).endswith("░  60% used · 400.0G free → up to 500.0G after marked")
-    assert fit(60, m).endswith("░  60% used · 400.0G free → ≤500.0G")
+    assert fit(80, m).count(":") == 2  # the bar shrank first
+    assert fit(70, m).endswith(".  60% used · 400.0G free → up to 500.0G after marked")
+    assert fit(60, m).endswith(".  60% used · 400.0G free → ≤500.0G")
     assert fit(41, m) == "disk  60% used · 400.0G free → ≤500.0G"
 
 
@@ -605,7 +613,7 @@ def test_disk_bar_used_part_is_coloured_by_fill_level(browser, free, level):
     b, scr = browser
     b.colors = {"ok": 1 << 20, "stale": 2 << 20, "dead": 3 << 20}
     b.draw_disk(1, (free * G, 1000 * G), 0)
-    assert [a for y, t, a in scr.attrs if t.startswith("█")] == [b.colors[level]]
+    assert [a for y, t, a in scr.attrs if t.strip() == ""] == [b.colors[level] | curses.A_REVERSE]
 
 
 class DiskEnv:
@@ -647,7 +655,7 @@ def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, mon
     for _ in range(3):  # redraws reuse the reading
         b.draw(b.rows())
     assert scr.lines[1].endswith("  61% used · 390.0G free of 1.0T → up to 395.0G after marked")
-    assert "▒" in scr.lines[1]
+    assert ":" in scr.lines[1]
     monkeypatch.setattr(actions, "remove", lambda p, trash=False: "deleted")
     b.act([f for f in b.findings if f.label == "Dead-abc"], trash=False)
     b.draw(b.rows())
@@ -673,3 +681,72 @@ def test_confirm_screen_lists_the_plan_and_any_other_key_goes_back(browser, monk
     scr.keys = [ord("t")]
     b.confirm_and_act()
     assert acted == [True]
+
+
+def test_screen_never_draws_a_run_of_one_non_ascii_character(browser):
+    """ncurses may send a run of identical cells as the character once plus `rep`
+    (CSI <n> b). macOS's ncurses 6.0 puts only the low byte of a wide character there, so such
+    a run reaches the terminal as invalid UTF-8. Runs must stay ASCII."""
+    b, scr = browser
+    b.disk = (183_800_000_000, 994_610_155_520)
+    b.marked = {"derived-data:Dead-abc"}
+    b.findings[0].size = 50_000_000_000
+    for w in (160, 80):
+        scr.w = w
+        b.draw(b.rows())
+        for _y, text, _attr in scr.attrs:
+            runs = re.findall(r"([^\x00-\x7f])\1", text)
+            assert not runs, f"run of {runs[0]!r} in {text!r}"
+
+
+REP_TERMINFO = (
+    "mb-rep|xterm-256color plus rep,\n\trep=%p1%c\\E[%p2%{1}%-%db,\n\tuse=xterm-256color,\n"
+)
+PTY_CHILD = """
+import curses
+from mobile_broom import tui
+
+def main(scr):
+    b = tui.Browser(scr, env=None, cfg=None, selectors=None)
+    b.disk = (183_800_000_000, 994_610_155_520)
+    b.draw([])
+    b.draw_disk(1, b.disk, 50_000_000_000)
+    scr.refresh()
+
+curses.wrapper(main)
+"""
+
+
+@pytest.mark.skipif(shutil.which("tic") is None, reason="needs tic to compile a terminfo entry")
+def test_bar_and_rule_reach_a_rep_terminal_as_valid_utf8(tmp_path):
+    """The real curses, in a pty, with a terminfo entry that has `rep` (as Ghostty's
+    xterm-ghostty does). The bytes must decode as UTF-8, and `rep` must follow only ASCII."""
+    (tmp_path / "rep.ti").write_text(REP_TERMINFO)
+    subprocess.run(
+        ["tic", "-x", "-o", str(tmp_path / "terminfo"), str(tmp_path / "rep.ti")],
+        check=True,
+        capture_output=True,
+    )
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+    env = dict(os.environ, TERM="mb-rep", TERMINFO=str(tmp_path / "terminfo"), LC_ALL="en_US.UTF-8")
+    child = subprocess.Popen(
+        [sys.executable, "-c", PTY_CHILD], stdin=slave, stdout=slave, stderr=slave, env=env
+    )
+    os.close(slave)
+    out = b""
+    while select.select([master], [], [], 10)[0]:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError:  # EIO once the child has exited
+            break
+        if not chunk:
+            break
+        out += chunk
+    os.close(master)
+    assert child.wait(10) == 0, out
+    reps = re.findall(rb"(.)\x1b\[\d+b", out, re.DOTALL)
+    assert reps, "the terminfo entry's rep was not used; the test proves nothing"
+    assert all(c[0] < 0x80 for c in reps), reps
+    assert b"-" in reps  # the footer rule arrived; the old one was dropped without a trace
+    out.decode("utf-8")  # raises on the old bar: b"\x88\x1b[32b" for a run of U+2588
