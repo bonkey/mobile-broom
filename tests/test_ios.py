@@ -403,3 +403,64 @@ def test_misc_ios_caches(env, cfg, home):
     assert fs["Library/Caches/org.swift.swiftpm"].verdict == "shared"
     assert fs["DocumentationCache"].verdict == "shared"
     assert fs["2026-01-02/App 2-1-26.xcarchive"].verdict == "review"
+
+
+def _age(path, days):
+    t = days_ago(days).timestamp()
+    os.utime(path, (t, t))
+
+
+def test_spm_outdated_repositories_and_artifacts(env, cfg, home):
+    """Clones idle past stale_days are stale; an artifact superseded by a newer download of
+    the same URL is dead; recent clones and the newest artifact are not outdated."""
+    cache = home / "Library/Caches/org.swift.swiftpm"
+    repos, arts = cache / "repositories", cache / "artifacts"
+    url = "https://github.com/apple/swift-nio.git"
+    mkfile(repos / "swift-nio-a9bb6d62/config", text=f'[remote "origin"]\n\turl = {url}\n')
+    _age(repos / "swift-nio-a9bb6d62", 40)
+    # cloned long ago, fetched two days ago: FETCH_HEAD is rewritten in place
+    mkfile(repos / "swift-log-ba8887eb/FETCH_HEAD", size=10)
+    _age(repos / "swift-log-ba8887eb/FETCH_HEAD", 2)
+    _age(repos / "swift-log-ba8887eb", 40)
+    mkfile(repos / "swift-syntax-e1f983d3/HEAD", size=10)
+    mkfile(repos / ".DS_Store", size=10)
+    old, new, lone, beta = (
+        "https___example_com_Foo_releases_download_1_2_0_Foo_xcframework_zip",
+        "https___example_com_Foo_releases_download_1_10_0_Foo_xcframework_zip",
+        "https___example_com_Bar_releases_download_v2_0_0_Bar_xcframework_zip",
+        "https___example_com_Foo_releases_download_1_11_0_beta_1_Foo_xcframework_zip",
+    )
+    for name in (old, new, lone, beta):
+        mkfile(arts / name, size=10)
+    _age(arts / lone, 90)  # download date alone never makes an artifact outdated
+
+    fs = run_finders(["spm-outdated"], env, cfg)
+    by = by_label(fs)
+    assert set(by) == {"swift-nio-a9bb6d62", old}
+    repo = by["swift-nio-a9bb6d62"]
+    assert (repo.bucket, repo.verdict, repo.group) == ("repositories", "stale", "ios")
+    assert url in repo.evidence and "last fetched" in repo.evidence
+    assert repo.action.kind == "remove" and repo.action.path == str(repos / "swift-nio-a9bb6d62")
+    assert repo.last is not None and repo.extra["url"] == url
+    art = by[old]
+    assert (art.bucket, art.verdict) == ("artifacts", "dead")
+    assert "1.2.0 superseded by 1.10.0" in art.evidence
+    assert art.action.kind == "remove" and art.action.path == str(arts / old)
+
+
+def test_spm_outdated_leaves_spm_cache_as_is(env, cfg, home):
+    """The outdated clones are a subset of the spm-cache finding, which stays unchanged."""
+    repo = mkfile(home / "Library/Caches/org.swift.swiftpm/repositories/x-12345678/HEAD")
+    _age(repo.parent, 40)
+    mkfile(home / "Library/org.swift.swiftpm/security/fingerprints/x.json", size=10)
+    fs = by_label(run_finders(["spm-cache"], env, cfg))
+    assert set(fs) == {"Library/Caches/org.swift.swiftpm", "Library/org.swift.swiftpm"}
+    cache = fs["Library/Caches/org.swift.swiftpm"]
+    assert cache.verdict == "shared" and cache.action.kind == "remove"
+    keep = fs["Library/org.swift.swiftpm"]
+    assert keep.verdict == "review" and keep.action is None and keep.locked
+    assert [f.label for f in run_finders(["spm-outdated"], env, cfg)] == ["x-12345678"]
+
+
+def test_spm_outdated_without_cache(env, cfg):
+    assert run_finders(["spm-outdated"], env, cfg) == []

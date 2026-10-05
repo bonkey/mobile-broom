@@ -97,6 +97,7 @@ clones can overlap and the sum is not a reclaim promise.
 | `derived-data-shared` | `*.noindex`, `SDKExplicitPrecompiledModules` — no owner | delete |
 | `previews` | `UserData/Previews/Simulator Devices` and the `Simulator%20Devices` duplicate; skipped if a preview sim is booted | delete |
 | `archives` `spm-cache` `doc-cache` | size + mtime | delete / report |
+| `spm-outdated` | the outdated items inside `~/Library/Caches/org.swift.swiftpm`, one finding each under an `artifacts` or `repositories` heading (`spm-cache` counts them too). `repositories/<name>-<hash>`: a cached package clone not fetched for `stale_days` → stale. SwiftPM fetches into it on update or when a project needs a revision it lacks, so the date (newest of `FETCH_HEAD` and the clone dir mtime) is the last fetch, not the last copy out of it. `artifacts/<mangled URL>`: a binary download whose URL differs from another cached one only by an older version (`…_download_9_26_0_…` vs `…_9_27_0_…`) → dead. The newest version is never listed: its file date is the download date, and a cache hit does not touch it | delete |
 | `avd` | `~/.android/avd/*.ini` → `config.ini` target image; last boot = `userdata-qemu.img` mtime; `Medium_Phone*` = Android Studio default | `avdmanager delete avd -n` (falls back to deleting `.avd` + `.ini` if not installed) |
 | `avd-snapshots` | `snapshots/` under an AVD — where the bloat lives | delete |
 | `system-images` | installed under `$ANDROID_HOME/system-images` vs every AVD's `image.sysdir.1` | `sdkmanager --uninstall` (falls back to deleting the image dir) |

@@ -488,6 +488,74 @@ def find_spm_cache(env, cfg):
         )
 
 
+# A version in a cached artifact's name: SwiftPM turns every non-alphanumeric URL character
+# into "_", so ".../download/v9.27.0/Sentry.xcframework.zip" holds "v9_27_0".
+SPM_VERSION = re.compile(r"(?:^|(?<=_))v?\d+(?:_\d+)+(?=_|$)")
+
+
+@register("spm-outdated")
+def find_spm_outdated(env, cfg):
+    """Outdated parts of the SwiftPM cache, one finding each; spm-cache also counts them."""
+    cache = env.p("Library", "Caches", "org.swift.swiftpm")
+    repos = cache / "repositories"
+    for name in listdir(repos):
+        path = repos / name
+        if not path.is_dir():
+            continue
+        # SwiftPM fetches into the cached clone on update, or when a project needs a revision the
+        # clone lacks; copying a revision it already has out of the cache leaves no trace.
+        # git rewrites FETCH_HEAD in place, which leaves the directory's mtime alone.
+        last = max(filter(None, (mtime_of(path), mtime_of(path / "FETCH_HEAD"))), default=None)
+        age = age_days(last)
+        if age is None or age <= cfg.stale_days:
+            continue
+        try:
+            m = re.search(r"(?m)^\s*url\s*=\s*(\S+)", (path / "config").read_text())
+        except (OSError, UnicodeDecodeError):
+            m = None
+        url = m.group(1) if m else None
+        yield Finding(
+            category="spm-outdated",
+            group="ios",
+            label=name,
+            bucket="repositories",
+            paths=[str(path)],
+            evidence=f"{url or 'no remote url'}; last fetched {when(last)} — idle > "
+            f"{cfg.stale_days}d; re-cloned on next resolve",
+            last=last,
+            verdict="stale",
+            action=Action(kind="remove", path=str(path)),
+            extra={"url": url},
+        )
+    arts = cache / "artifacts"
+    same_url: dict[str, list[tuple]] = defaultdict(list)
+    for name in listdir(arts):
+        if name.startswith("."):
+            continue
+        runs = [r.lstrip("v") for r in SPM_VERSION.findall(name)]
+        ver = tuple(tuple(int(n) for n in r.split("_")) for r in runs)
+        shown = "/".join(dict.fromkeys(r.replace("_", ".") for r in runs))
+        same_url[SPM_VERSION.sub("*", name)].append((ver, shown, name))
+    for items in same_url.values():
+        items.sort()
+        newest = items[-1]
+        for _ver, shown, name in items[:-1]:
+            path = arts / name
+            mt = mtime_of(path)
+            yield Finding(
+                category="spm-outdated",
+                group="ios",
+                label=name,
+                bucket="artifacts",
+                paths=[str(path)],
+                evidence=f"{shown} superseded by {newest[1]}, same URL otherwise; "
+                f"downloaded {when(mt)}; re-downloaded on next resolve",
+                last=mt,
+                verdict="dead",
+                action=Action(kind="remove", path=str(path)),
+            )
+
+
 @register("doc-cache")
 def find_doc_cache(env, cfg):
     for name in ("DocumentationCache", "DocumentationIndex"):

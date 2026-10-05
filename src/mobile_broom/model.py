@@ -20,6 +20,7 @@ GROUPS: dict[str, list[str]] = {
         "derived-data-shared",
         "archives",
         "spm-cache",
+        "spm-outdated",
         "doc-cache",
         "previews",
     ],
