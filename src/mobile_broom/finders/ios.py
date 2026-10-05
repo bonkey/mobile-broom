@@ -8,7 +8,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from ..model import Action, Finding
+from ..model import Action, Finding, Unlock
 from . import register
 from ._util import age_days, build_key, file_url_path, listdir, mtime_of, version_tuple, when
 
@@ -237,10 +237,12 @@ def find_sim_devices(env, cfg):
         age = age_days(last)
         idle = age is not None and age > cfg.stale_days
         action = Action(kind="argv", argv=["xcrun", "simctl", "delete", d["udid"]])
-        locked = None
+        locked = unlock = None
         if d.get("state") == "Booted":
-            verdict, action = "review", None
-            evidence = "; ".join(["BOOTED now", *marks, used])
+            verdict = "review"
+            evidence = "; ".join([*marks, used])
+            unlock = Unlock(["xcrun", "simctl", "shutdown", d["udid"]], action, evidence)
+            action, evidence = None, f"BOOTED now; {evidence}"
             locked = "device is booted; shut it down first"
         elif idle:
             verdict = "stale"
@@ -261,6 +263,7 @@ def find_sim_devices(env, cfg):
             action=action,
             locked=locked,
             extra=extra | {"adhoc": adhoc, "superseded": superseded, "state": d.get("state")},
+            unlock=unlock,
         )
 
 
@@ -280,15 +283,16 @@ def find_sim_data(env, cfg):
         state = d.get("state")
         age = age_days(last)
         used = f"last booted {when(last)} ({src})" if last else "no boot record"
-        locked = None
+        action = Action(kind="argv", argv=["xcrun", "simctl", "erase", d["udid"]])
+        evidence = f"{rt}; {used}"
+        locked = unlock = None
         if state == "Booted":
-            verdict, action = "review", None
-            evidence = f"BOOTED now; {rt}; {used}"
+            verdict = "review"
+            unlock = Unlock(["xcrun", "simctl", "shutdown", d["udid"]], action, evidence)
+            action, evidence = None, f"BOOTED now; {evidence}"
             locked = "device is booted; shut it down first"
         else:
             verdict = "stale" if age is not None and age > cfg.stale_days else "review"
-            evidence = f"{rt}; {used}"
-            action = Action(kind="argv", argv=["xcrun", "simctl", "erase", d["udid"]])
         yield Finding(
             category="sim-data",
             group="ios",
@@ -302,6 +306,7 @@ def find_sim_data(env, cfg):
             action=action,
             locked=locked,
             extra={"udid": d.get("udid"), "state": state, "last_booted": last},
+            unlock=unlock,
         )
 
 

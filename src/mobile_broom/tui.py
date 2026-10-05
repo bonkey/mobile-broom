@@ -6,6 +6,7 @@ from __future__ import annotations
 import curses
 import io
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -43,7 +44,7 @@ HELP = [
 LEGEND = [
     "[ ] removable — space marks it",
     "[x] marked",
-    "[-] locked — not removable; the bottom line says why",
+    "[-] locked — not removable; the bottom line says why (space offers to shut a booted sim down)",
     "…   size not computed yet (rescan in progress)",
     "date column: last use/modification the verdict is based on, and its age in days",
 ]
@@ -492,6 +493,36 @@ class Browser:
         scr.getch()
         self.msg = actions.summary(results)
 
+    def unlock(self, f: Finding):
+        """Offer to run `f.unlock` (e.g. shut a booted simulator down). On success the finding
+        takes the action it frees; a failure is left in `msg`."""
+        scr = self.scr
+        cmd = shlex.join(f.unlock.argv)
+        scr.erase()
+        _hints(
+            scr,
+            0,
+            0,
+            [("y", "run it, then mark"), ("any other key", "back")],
+            self.key_attr,
+            lead=f"{f.locked}   ",
+        )
+        _put(scr, 2, 0, f"  {f.label}")
+        _put(scr, 3, 0, f"  $ {cmd}")
+        scr.refresh()
+        scr.timeout(-1)  # the loop ticks while a scan runs; wait for a real answer here
+        if scr.getch() not in (ord("y"), ord("Y")):
+            return
+        _put(scr, 5, 0, "running …", curses.A_BOLD)
+        scr.refresh()
+        r = self.env.run(f.unlock.argv)
+        if r.returncode != 0:
+            lines = (r.stderr or r.stdout or "").strip().splitlines()
+            self.msg = f"{cmd} failed: {lines[-1] if lines else f'exit {r.returncode}'}"
+            return
+        f.action, f.evidence = f.unlock.action, f.unlock.evidence
+        f.locked = f.unlock = None
+
     def show_text(self, title, lines, hints=(("any key", "continue"),)):
         scr = self.scr
         scr.erase()
@@ -570,11 +601,14 @@ class Browser:
                 self.close(row)
         elif k == ord(" "):
             if row.kind == "finding":
-                if row.finding.action:
-                    self.marked.symmetric_difference_update({row.finding.key})
+                f = row.finding
+                if not f.action and f.unlock:
+                    self.unlock(f)
+                if f.action:
+                    self.marked.symmetric_difference_update({f.key})
                     self.cur += 1
-                else:
-                    self.msg = f"not removable: {row.finding.locked}"
+                elif not self.msg:
+                    self.msg = f"not removable: {f.locked}"
             else:
                 self._toggle_all(row, lambda f: f.action is not None)
         elif k == ord("a"):

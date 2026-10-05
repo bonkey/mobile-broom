@@ -160,8 +160,14 @@ def test_worktree_simulators_are_dead_when_the_worktree_is_gone(env, cfg, home):
     assert gone.action.argv == ["xcrun", "simctl", "delete", "U-GONE"]
     assert 'no live worktree or branch named "MSP2-140-roi-accordion"' in gone.evidence
     assert "iOS 27.0 stays installed" in gone.evidence
-    assert fs["U-BOOT"].verdict == "review" and fs["U-BOOT"].action is None
-    assert "booted" in fs["U-BOOT"].locked
+    boot = fs["U-BOOT"]
+    assert boot.verdict == "review" and boot.action is None and "booted" in boot.locked
+    assert boot.evidence.startswith("BOOTED now; no live worktree")
+    # The TUI offers to shut it down; afterwards it deletes like U-GONE.
+    assert boot.unlock.argv == ["xcrun", "simctl", "shutdown", "U-BOOT"]
+    assert boot.unlock.action.argv == ["xcrun", "simctl", "delete", "U-BOOT"]
+    assert boot.unlock.evidence == boot.evidence.removeprefix("BOOTED now; ")
+    assert gone.unlock is None
 
 
 def test_worktree_simulators_need_a_worktree_to_compare_against(env, cfg, home):

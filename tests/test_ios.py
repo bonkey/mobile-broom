@@ -183,6 +183,12 @@ def test_sim_devices_and_data(env, cfg):
     assert dev["U-STALE"].verdict == "stale"
     assert dev["U-STALE"].action.argv == ["xcrun", "simctl", "delete", "U-STALE"]
     assert dev["U-BOOT"].verdict == "review" and dev["U-BOOT"].action is None
+    assert dev["U-BOOT"].evidence.startswith("BOOTED now; default name; last booted")
+    # The TUI offers `simctl shutdown`, which frees the delete and drops the BOOTED evidence.
+    assert dev["U-BOOT"].unlock.argv == ["xcrun", "simctl", "shutdown", "U-BOOT"]
+    assert dev["U-BOOT"].unlock.action.argv == ["xcrun", "simctl", "delete", "U-BOOT"]
+    assert dev["U-BOOT"].unlock.evidence == dev["U-BOOT"].evidence.removeprefix("BOOTED now; ")
+    assert dev["U-STALE"].unlock is None
     # A small data dir is noise for sim-data, but the device itself is still removable.
     assert dev["U-TINY"].verdict == "review"
     assert dev["U-TINY"].action.argv == ["xcrun", "simctl", "delete", "U-TINY"]
@@ -191,6 +197,11 @@ def test_sim_devices_and_data(env, cfg):
     assert data["U-STALE"].verdict == "stale" and data["U-STALE"].size == 900_000_000
     assert data["U-STALE"].action.argv == ["xcrun", "simctl", "erase", "U-STALE"]
     assert data["U-BOOT"].verdict == "review" and data["U-BOOT"].action is None
+    assert data["U-BOOT"].evidence.startswith("BOOTED now; iOS 27.0; last booted")
+    assert data["U-BOOT"].unlock.argv == ["xcrun", "simctl", "shutdown", "U-BOOT"]
+    assert data["U-BOOT"].unlock.action.argv == ["xcrun", "simctl", "erase", "U-BOOT"]
+    assert data["U-BOOT"].unlock.evidence == data["U-BOOT"].evidence.removeprefix("BOOTED now; ")
+    assert data["U-STALE"].unlock is None
 
 
 DT = "com.apple.CoreSimulator.SimDeviceType."

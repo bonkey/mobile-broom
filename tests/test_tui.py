@@ -2,13 +2,14 @@
 and the background scan that fills the tree while keys keep working."""
 
 import curses
+import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from mobile_broom import actions, finders, tui
-from mobile_broom.model import Action, Finding
+from mobile_broom.model import Action, Finding, Unlock
 
 
 class FakeScreen:
@@ -92,6 +93,68 @@ def test_locked_finding_shows_reason_and_refuses_marking(browser):
     b.loop()
     assert b.marked == set()
     assert "not removable: device is booted" in scr.text()
+
+
+class RunEnv:
+    def __init__(self, returncode=0, stderr=""):
+        self.calls: list[list[str]] = []
+        self.returncode, self.stderr = returncode, stderr
+
+    def run(self, argv, timeout=120):
+        self.calls.append(argv)
+        return subprocess.CompletedProcess(argv, self.returncode, "", self.stderr)
+
+
+def _booted(b, env):
+    """The fixture's booted device, with the shutdown its finder offers."""
+    b.env = env
+    f = b.findings[1]
+    f.unlock = Unlock(
+        ["xcrun", "simctl", "shutdown", "U1"],
+        Action("argv", argv=["xcrun", "simctl", "erase", "U1"]),
+        "iOS 27; last booted today",
+    )
+    return f
+
+
+def test_space_on_booted_device_offers_shutdown_then_marks(browser):
+    b, scr = browser
+    f = _booted(b, RunEnv())
+    rows = b.rows()
+    b.cur = 2
+    scr.keys = [ord("y")]
+    b.handle_key(ord(" "), rows)
+    prompt = "\n".join(scr.frames[-2].values())
+    assert "device is booted; shut it down first" in prompt and " y  run it, then mark" in prompt
+    assert "$ xcrun simctl shutdown U1" in prompt
+    assert b.env.calls == [["xcrun", "simctl", "shutdown", "U1"]]
+    assert b.marked == {f.key} and b.cur == 3 and b.msg == ""
+    assert f.action.argv == ["xcrun", "simctl", "erase", "U1"]
+    assert f.locked is None and f.unlock is None and f.evidence == "iOS 27; last booted today"
+    b.cur = 2
+    b.draw(b.rows())
+    assert "[x] review" in scr.text() and "xcrun simctl erase U1" in scr.text()
+
+
+def test_declining_shutdown_leaves_device_locked(browser):
+    b, scr = browser
+    f = _booted(b, RunEnv())
+    b.cur = 2
+    scr.keys = [ord("n")]
+    b.handle_key(ord(" "), b.rows())
+    assert b.env.calls == [] and b.marked == set() and f.unlock is not None
+    assert b.msg == "not removable: device is booted; shut it down first"
+
+
+def test_failed_shutdown_reports_and_stays_locked(browser):
+    b, scr = browser
+    f = _booted(b, RunEnv(returncode=164, stderr="Unable to shutdown device: Shutdown\n"))
+    b.cur = 2
+    scr.keys = [ord("y")]
+    b.handle_key(ord(" "), b.rows())
+    assert b.marked == set() and f.action is None and f.locked and f.unlock is not None
+    assert b.msg == "xcrun simctl shutdown U1 failed: Unable to shutdown device: Shutdown"
+    assert b.cur == 2
 
 
 def test_removable_finding_marks_and_shows_action(browser):

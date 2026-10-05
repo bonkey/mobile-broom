@@ -10,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from ..model import Action, Finding
+from ..model import Action, Finding, Unlock
 from . import register
 from ._util import age_days, listdir, mtime_of, when
 from .ios import last_boot, runtime_name
@@ -248,14 +248,16 @@ def find_worktree_simulators(env, cfg):
             used,
             f"{rt} stays installed; simctl create remakes the device",
         ]
-        locked = None
+        action = Action(kind="argv", argv=["xcrun", "simctl", "delete", d["udid"]])
+        locked = unlock = None
         if d.get("state") == "Booted":
-            verdict, action = "review", None
+            verdict = "review"
+            unlock = Unlock(["xcrun", "simctl", "shutdown", d["udid"]], action, "; ".join(bits))
+            action = None
             bits.insert(0, "BOOTED now")
             locked = "device is booted; shut it down first"
         else:
             verdict = "dead"
-            action = Action(kind="argv", argv=["xcrun", "simctl", "delete", d["udid"]])
         yield Finding(
             category="worktree-simulators",
             group="worktrees",
@@ -275,6 +277,7 @@ def find_worktree_simulators(env, cfg):
                 "device_type": d.get("deviceTypeIdentifier"),
                 "worktrees_scanned": len(live),
             },
+            unlock=unlock,
         )
 
 

@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "mobile-broom"
-version = "0.1.10"
+version = "0.1.12"
 source = { editable = "." }
 
 [package.dev-dependencies]

@@ -65,6 +65,16 @@ class Action:
 
 
 @dataclass
+class Unlock:
+    """A command that lifts a finding's lock (shutting down a booted simulator), and the
+    action and evidence the finding has once it ran."""
+
+    argv: list[str]
+    action: Action
+    evidence: str
+
+
+@dataclass
 class Finding:
     category: str
     group: str
@@ -78,6 +88,7 @@ class Finding:
     last: datetime | None = None  # last use/modification the verdict was based on
     bucket: str | None = None  # sub-heading inside the category (sim devices: their runtime)
     extra: dict = field(default_factory=dict)
+    unlock: Unlock | None = None  # the TUI offers to run it when the finding is marked
 
     def __post_init__(self):
         self.last = as_utc(self.last)

@@ -65,7 +65,8 @@ row shows `total · dead · count`; every finding shows the date its verdict is 
 (last use or modification) and its age in days. Simulator categories (`sim-devices`,
 `sim-data`, `worktree-simulators`) group their devices under one heading per runtime,
 newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the bottom line says why
-(`locked: device is booted; shut it down first`), and space on it repeats the reason. `d` shows
+(`locked: device is booted; shut it down first`), and space on it repeats the reason. On a
+booted simulator device space asks first, then runs `xcrun simctl shutdown <udid>` and marks it. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
 it runs; `clean` prints the same one line per finding.
 
@@ -114,7 +115,7 @@ clones can overlap and the sum is not a reclaim promise.
   `avdmanager`/`sdkmanager` when installed and fall back to removing the exact dirs they would.
 - No sudo. Root-owned paths get the command printed instead (shell-quoted, copy-paste safe).
 - Deletes by default; `--trash` (or `t` in the TUI confirm) moves to `~/.Trash` instead.
-- Booted simulators, their runtimes, worktrees themselves (only git-ignored artifact dirs inside them) and `protected` globs from config are never acted on.
+- Booted simulators (until you shut one down from the TUI), their runtimes, worktrees themselves (only git-ignored artifact dirs inside them) and `protected` globs from config are never acted on.
 - Everything without an action says why (`locked`), so "not removable" is never a mystery.
 - `--dry-run` on every `clean`; for runtimes it runs `simctl runtime delete --dry-run` and shows simctl's own answer.
 - `simctl` needs an unsandboxed process (XPC to CoreSimulatorService). When blocked, mobile-broom says so and still reports runtimes from `images.plist`, with the commands printed for you to run.
