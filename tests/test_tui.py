@@ -346,7 +346,7 @@ def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
         " all keys",
         " quit",
     ]
-    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc"
+    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc".ljust(scr.w - 1 - 13) + "sort: verdict"
     assert scr.lines[bottom - 2] == "  delete /dd/Dead-abc"
     assert scr.lines[bottom - 3] == "— orphan"
     assert scr.lines[bottom - 4] == "-" * (scr.w - 1)
@@ -547,16 +547,78 @@ def test_marked_size_shows_in_tree_rows_and_header_chip(browser):
 G = 1_000_000_000
 
 
-def test_header_is_title_marked_chip_and_right_aligned_sort(browser):
-    """Line 0: title, the marked chip, sort and scan progress flush right. No disk reading:
-    line 1 stays empty and the tree still starts on line 3."""
+def test_header_is_title_and_marked_chip_only(browser):
+    """Line 0: title and the marked chip; sort and scan progress live in the footer. No disk
+    reading: line 1 stays empty and the tree still starts on line 3."""
     b, scr = browser
-    b.draw(b.rows())
-    assert scr.lines[0] == "mobile-broom   marked 0 · 0B".ljust(160 - 1 - 13) + "sort: verdict"
-    assert 1 not in scr.lines and 2 not in scr.lines and scr.lines[3].startswith("> ▾ ios")
     b.status = "sizing 3/9"
     b.draw(b.rows())
-    assert scr.lines[0].endswith(" sort: verdict   ⟳ sizing 3/9") and len(scr.lines[0]) == 159
+    assert scr.lines[0] == "mobile-broom   marked 0 · 0B"
+    assert 1 not in scr.lines and 2 not in scr.lines and scr.lines[3].startswith("> ▾ ios")
+
+
+def test_status_is_right_aligned_on_the_message_line_above_the_keys(browser):
+    """The message stays left; sort and scan progress sit flush right on the same line. When
+    they collide the message wins: sort goes first, then the progress. Never wraps."""
+    b, scr = browser
+    line = scr.h - 2
+    b.draw(b.rows())
+    assert scr.lines[line] == "sort: verdict".rjust(scr.w - 1)
+    assert [a for y, t, a in scr.attrs if y == line] == [curses.A_BOLD]
+    b.status, b.msg = "sizing 3/9", "revealed /dd/Dead-abc"
+    status = "sort: verdict   ⟳ sizing 3/9"
+    b.draw(b.rows())
+    assert scr.lines[line] == b.msg.ljust(scr.w - 1 - len(status)) + status
+    assert scr.lines[line + 1].startswith(" space  mark")  # keys stay on the last line
+    scr.w = 60
+    for msg, shown in (
+        ("x" * 29, status),  # 29 + 2 + 28 = 59: still fits
+        ("x" * 30, "⟳ sizing 3/9"),
+        ("x" * 45, "⟳ sizing 3/9"),
+        ("x" * 46, ""),
+    ):
+        b.msg = msg
+        b.draw(b.rows())
+        assert scr.lines[line] == (msg.ljust(59 - len(shown)) + shown).rstrip(), msg
+    b.status, b.msg = "", "x" * 46
+    b.draw(b.rows())
+    assert scr.lines[line] == "x" * 46  # no scan: sort alone is dropped
+
+
+@pytest.fixture
+def colour_browser(monkeypatch):
+    monkeypatch.setattr(curses, "has_colors", lambda: True)
+    monkeypatch.setattr(curses, "start_color", lambda: None)
+    monkeypatch.setattr(curses, "use_default_colors", lambda: None)
+    monkeypatch.setattr(curses, "init_pair", lambda i, fg, bg: None)
+    monkeypatch.setattr(curses, "color_pair", lambda i: i << 8)
+    monkeypatch.setattr(curses, "curs_set", lambda _v: None)
+    scr = FakeScreen()
+    return tui.Browser(scr, env=None, cfg=None, selectors=None), scr
+
+
+def test_marking_keys_match_the_marked_chip_and_d_is_red(colour_browser):
+    b, scr = colour_browser
+    red = b.colors["dead"] | curses.A_BOLD | curses.A_REVERSE
+    b.draw([])
+    chips = {t.strip(): a for y, t, a in scr.attrs if y == scr.h - 1 and a & curses.A_REVERSE}
+    assert list(chips) == tui.FOOTER
+    assert chips["space"] == chips["a"] == b.mark_attr
+    assert chips["d"] == red
+    assert {chips[k] for k in ("s", "o", "r", "?", "q")} == {b.key_attr}
+    assert len({b.mark_attr, red, b.key_attr}) == 3
+    scr.attrs.clear()
+    b.show_keys()  # the `?` screen uses the same per-key colours
+    keys = {t.strip(): a for y, t, a in scr.attrs if y >= 2 and a & curses.A_REVERSE}
+    assert keys["space"] == keys["a"] == b.mark_attr and keys["d"] == red
+    assert {keys[k] for k in ("↑↓ jk", "n", "s", "q")} == {b.key_attr}
+
+
+def test_without_colour_every_chip_is_bold_reverse(browser):
+    b, scr = browser
+    b.draw([])
+    chips = {t.strip(): a for y, t, a in scr.attrs if y == scr.h - 1 and a & curses.A_REVERSE}
+    assert set(chips.values()) == {curses.A_BOLD | curses.A_REVERSE}
 
 
 def test_disk_line_segments_and_percentage_without_marks():

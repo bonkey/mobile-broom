@@ -62,12 +62,14 @@ group · `n` unmark all · `d` act on marked (confirm screen shows the exact com
 The scan runs in the background, one worker per category: branches appear as their finder
 returns and sizes replace the `…` indicators one row at a time (same on `r`). You can move,
 expand and mark while it runs; `d` waits for the scan to finish. The top line shows the
-marked chip, the sort and the scan progress. Below it a bar shows the disk that holds your
+marked chip. Below it a bar shows the disk that holds your
 home folder (a solid block used, `:` marked, `.` free) with `NN% used · <free> free of <total>`; while
 anything is marked it adds `→ up to <free + marked> after marked`. That is a ceiling, not a
 promise: marked sizes are candidates, and `t` (move to `~/.Trash`) frees nothing until the
 Trash is emptied. The disk is read at startup, when a scan finishes and after `d`. The bottom
-line lists the action keys; `?` lists them all. Every group and category row shows `total · dead · count`; every finding shows the date its verdict is based on
+line lists the action keys (marking keys in the marked chip's yellow, `d` in red; `?` lists
+them all); the line above it holds the last message on the left and the sort and scan
+progress on the right. Every group and category row shows `total · dead · count`; every finding shows the date its verdict is based on
 (last use or modification) and its age in days. Simulator categories (`sim-devices`,
 `sim-data`, `worktree-simulators`) group their devices under one heading per runtime,
 newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the detail line under the tree says why

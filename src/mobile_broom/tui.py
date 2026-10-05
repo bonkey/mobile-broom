@@ -87,9 +87,10 @@ def _totals(fs: list[Finding], marked: set[str]) -> str:
     return f"{human(total).strip()} total · dead {human(dead).strip()}{mark} · {len(fs)} findings"
 
 
-def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
+def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD, chip_attrs=None) -> int:
     """Draw `lead` then `[key] desc` pairs, keys as chips, wrapping to the next line when
-    the terminal is too narrow. Returns the y of the last line used."""
+    the terminal is too narrow. `chip_attrs` overrides `key_attr` per key. Returns the y of
+    the last line used."""
     _h, w = scr.getmaxyx()
     if lead:
         _put(scr, y, x, lead, lead_attr)
@@ -100,7 +101,7 @@ def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
         if x + len(key) + len(desc) + 4 > w:
             y, x = y + 1, 0
         chip = f" {key} "
-        _put(scr, y, x, chip, key_attr)
+        _put(scr, y, x, chip, (chip_attrs or {}).get(key, key_attr))
         x += len(chip)
         _put(scr, y, x, f" {desc}", curses.A_DIM)
         x += len(desc) + 1
@@ -184,7 +185,7 @@ class Browser:
         self.marked: set[str] = set()
         self.cur = self.off = 0
         self.msg = ""
-        self.status = ""  # collecting/sizing progress shown in the header
+        self.status = ""  # collecting/sizing progress shown above the keys
         self.disk: tuple[int, int] | None = None  # (free, total) of HOME's volume, for the bar
         self.loading = False  # a background scan is filling self.findings
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
@@ -214,6 +215,12 @@ class Browser:
             self.colors["review"] = curses.A_DIM
             self.key_attr = self.colors["key"] | curses.A_BOLD | curses.A_REVERSE
             self.mark_attr = self.colors["stale"] | curses.A_BOLD | curses.A_REVERSE
+        # marking keys look like the marked chip; `d` deletes, so it is red
+        self.chip_attrs = {
+            "space": self.mark_attr,
+            "a": self.mark_attr,
+            "d": self.colors.get("dead", 0) | curses.A_BOLD | curses.A_REVERSE,
+        }
 
     # -- collecting ------------------------------------------------------
     def collect(self, refresh: bool):
@@ -427,17 +434,13 @@ class Browser:
         msize = sum(f.size or 0 for f in marked)
         head = "mobile-broom  "
         chip = f" marked {len(marked)} · {human(msize).strip()} "
-        tail = f"sort: {SORTS[self.sort][0]}"
-        if self.status:
-            tail += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
         _put(scr, 0, len(head), chip, self.mark_attr)
-        _put(scr, 0, max(len(head) + len(chip) + 2, w - 1 - len(tail)), tail, curses.A_BOLD)
         disk = self.disk  # one snapshot: a finishing scan thread may replace it
         if disk:
             self.draw_disk(1, disk, msize)
         # fixed heights: title, disk bar, blank line on top; rule, 2 detail lines, message
-        # and keys at the bottom
+        # with the status flush right, and keys at the bottom
         top = 3
         body = max(1, h - top - 5)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
@@ -474,8 +477,20 @@ class Browser:
                 _put(scr, h - 3, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
         if self.msg:
             _put(scr, h - 2, 0, self.msg, curses.A_DIM)
-        _hints(scr, h - 1, 0, _footer(w), self.key_attr)
+        self.draw_status(h - 2, w)
+        _hints(scr, h - 1, 0, _footer(w), self.key_attr, chip_attrs=self.chip_attrs)
         scr.refresh()
+
+    def draw_status(self, y: int, w: int):
+        """Sort and scan progress, flush right on the message line. The message wins: when
+        they collide, sort goes first, then the progress."""
+        sort = f"sort: {SORTS[self.sort][0]}"
+        progress = f"⟳ {self.status}" if self.status else ""
+        room = w - 1 - (len(self.msg) + 2 if self.msg else 0)
+        for text in (f"{sort}   {progress}" if progress else sort, progress):
+            if text and len(text) <= room:
+                _put(self.scr, y, w - 1 - len(text), text, curses.A_BOLD)
+                return
 
     def draw_disk(self, y: int, usage: tuple[int, int], marked: int):
         """The disk bar: used is a solid reversed block, green below 80% full, yellow below
@@ -631,7 +646,7 @@ class Browser:
         _hints(scr, 0, 0, [("any key", "continue")], self.key_attr, lead="keys   ")
         width = max(len(k) for k, _d in HELP) + 2
         for i, (key, desc) in enumerate(HELP):
-            _put(scr, 2 + i, 2, f" {key} ".ljust(width), self.key_attr)
+            _put(scr, 2 + i, 2, f" {key} ".ljust(width), self.chip_attrs.get(key, self.key_attr))
             _put(scr, 2 + i, 2 + width + 1, desc)
         y = 3 + len(HELP)
         _put(scr, y, 0, "marks", curses.A_BOLD)
