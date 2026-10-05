@@ -315,23 +315,47 @@ def test_act_draws_live_status_per_position(browser, monkeypatch):
     assert [f.label for f in b.findings] == ["iPhone · iOS 27"]
 
 
-def test_key_hints_are_drawn_as_highlighted_chips(browser):
-    """Every key on the help line is a chip (bold+reverse), the description is dim."""
+def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
+    """The last line holds the action keys as chips (bold+reverse) with dim descriptions, below
+    the message, the two detail lines and a dim rule. A narrow terminal drops chips from the
+    middle of the line, keeps `?` and `q`, and never wraps."""
     b, scr = browser
+    b.cur = 4  # Dead-abc: both detail lines are drawn
+    b.msg = "revealed /dd/Dead-abc"
     b.draw(b.rows())
-    chips = [(t, a) for y, t, a in scr.attrs if y == 1 and a == b.key_attr]
-    assert [t for t, _a in chips] == [f" {k} " for k, _d in tui.HELP]
+    bottom = scr.h - 1  # (line 0's marked chip shares key_attr without colours)
+    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y > 0]
+    assert chips == [(bottom, f" {k} ") for k in tui.FOOTER]
     assert b.key_attr & curses.A_REVERSE and b.key_attr & curses.A_BOLD
-    descs = [t for y, t, a in scr.attrs if y == 1 and a == curses.A_DIM]
-    assert " move" in descs and " quit" in descs
-    # a narrow terminal wraps the hints onto the spare line instead of cutting chips off
-    scr.attrs.clear()
-    scr.w = 60
-    b.draw(b.rows())
-    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and 0 < y < 5]
-    assert [t for _y, t in chips] == [f" {k} " for k, _d in tui.HELP]
-    assert {y for y, _t in chips} == {1, 2, 3}
-    assert scr.lines[5].startswith("> ▾ ios")  # the tree starts below the wrapped hints
+    descs = [t for y, t, a in scr.attrs if y == bottom and a == curses.A_DIM]
+    assert descs == [
+        " mark",
+        " mark dead",
+        " act",
+        " sort",
+        " reveal",
+        " rescan",
+        " all keys",
+        " quit",
+    ]
+    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc"
+    assert scr.lines[bottom - 2] == "  delete /dd/Dead-abc"
+    assert scr.lines[bottom - 3] == "— orphan"
+    assert scr.lines[bottom - 4] == "─" * (scr.w - 1)
+    assert scr.lines[3].startswith("  ▾ ios")  # tree below title, disk bar and a blank line
+    for w, keys in (
+        (95, tui.FOOTER),
+        (94, ["space", "a", "d", "s", "r", "?", "q"]),
+        (80, ["space", "a", "d", "r", "?", "q"]),
+        (50, ["space", "d", "?", "q"]),
+        (24, ["?", "q"]),
+    ):
+        scr.attrs.clear()
+        scr.w = w
+        b.draw(b.rows())
+        chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y > 0]
+        assert chips == [(bottom, f" {k} ") for k in keys], w
+        assert len(scr.lines[bottom]) < w
     scr.w = 160
     scr.attrs.clear()
     b.show_keys()
@@ -510,3 +534,142 @@ def test_marked_size_shows_in_tree_rows_and_header_chip(browser):
     assert "sim-data  5B total · dead 0B · 1 findings" in txt
     chip = next((t, a) for y, t, a in scr.attrs if y == 0 and "marked" in t)
     assert chip[0] == " marked 1 · 10B " and chip[1] & curses.A_REVERSE
+
+
+G = 1_000_000_000
+
+
+def test_header_is_title_marked_chip_and_right_aligned_sort(browser):
+    """Line 0: title, the marked chip, sort and scan progress flush right. No disk reading:
+    line 1 stays empty and the tree still starts on line 3."""
+    b, scr = browser
+    b.draw(b.rows())
+    assert scr.lines[0] == "mobile-broom   marked 0 · 0B".ljust(160 - 1 - 13) + "sort: verdict"
+    assert 1 not in scr.lines and 2 not in scr.lines and scr.lines[3].startswith("> ▾ ios")
+    b.status = "sizing 3/9"
+    b.draw(b.rows())
+    assert scr.lines[0].endswith(" sort: verdict   ⟳ sizing 3/9") and len(scr.lines[0]) == 159
+
+
+def test_disk_line_segments_and_percentage_without_marks():
+    line = tui._disk_line((400 * G, 1000 * G), 0, 120)
+    assert line == [
+        ("disk  ", "label"),
+        ("█" * 24, "used"),
+        ("", "marked"),
+        ("░" * 16, "free"),
+        ("  60% used · 400.0G free of 1.0T", "text"),
+    ]
+
+
+def test_disk_line_projects_free_space_after_marked_as_up_to():
+    """▒ is the marked part of the used space; the text projects free + marked as "up to",
+    capped at the disk total. Nothing marked: no projection, no ▒."""
+
+    def line(marked):
+        parts = tui._disk_line((400 * G, 1000 * G), marked, 120)
+        return "".join(t for t, part in parts if part in ("used", "marked", "free")), parts[-1][0]
+
+    assert line(0) == ("█" * 24 + "░" * 16, "  60% used · 400.0G free of 1.0T")
+    assert line(100 * G) == (
+        "█" * 20 + "▒" * 4 + "░" * 16,
+        "  60% used · 400.0G free of 1.0T → up to 500.0G after marked",
+    )
+    assert line(700 * G) == (  # more than is used: capped at the disk total
+        "▒" * 24 + "░" * 16,
+        "  60% used · 400.0G free of 1.0T → up to 1.0T after marked",
+    )
+    assert line(10)[0] == "█" * 23 + "▒" + "░" * 16  # a tiny mark still shows
+
+
+def test_disk_line_degrades_bar_then_total_then_projection_then_bar():
+    def fit(w, marked=0):
+        text = "".join(t for t, _part in tui._disk_line((400 * G, 1000 * G), marked, w))
+        assert len(text) <= w - 1  # never wraps, never needs clipping
+        return text
+
+    assert fit(200) == "disk  " + "█" * 24 + "░" * 16 + "  60% used · 400.0G free of 1.0T"
+    assert fit(60) == "disk  " + "█" * 13 + "░" * 8 + "  60% used · 400.0G free of 1.0T"
+    assert fit(48) == "disk  " + "█" * 10 + "░" * 7 + "  60% used · 400.0G free"
+    assert fit(30) == "disk  60% used · 400.0G free"
+    m = 100 * G
+    assert fit(80, m).endswith("  60% used · 400.0G free of 1.0T → up to 500.0G after marked")
+    assert fit(80, m).count("▒") == 2  # the bar shrank first
+    assert fit(70, m).endswith("░  60% used · 400.0G free → up to 500.0G after marked")
+    assert fit(60, m).endswith("░  60% used · 400.0G free → ≤500.0G")
+    assert fit(41, m) == "disk  60% used · 400.0G free → ≤500.0G"
+
+
+@pytest.mark.parametrize(("free", "level"), [(201, "ok"), (150, "stale"), (50, "dead")])
+def test_disk_bar_used_part_is_coloured_by_fill_level(browser, free, level):
+    b, scr = browser
+    b.colors = {"ok": 1 << 20, "stale": 2 << 20, "dead": 3 << 20}
+    b.draw_disk(1, (free * G, 1000 * G), 0)
+    assert [a for y, t, a in scr.attrs if t.startswith("█")] == [b.colors[level]]
+
+
+class DiskEnv:
+    """Hands out one (free, total) reading per call; an extra call fails the scan."""
+
+    simctl_error = None
+
+    def __init__(self, *readings):
+        self.readings = list(readings)
+
+    def disk_usage(self):
+        return self.readings.pop(0)
+
+
+def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, monkeypatch):
+    b, scr = browser
+    found = b.findings
+    b.env = DiskEnv((400 * G, 1000 * G), (390 * G, 1000 * G), (410_500_000_000, 1000 * G))
+
+    class FakeSizer:
+        workers = 1
+
+        def __init__(self, refresh=False, stop=None):
+            pass
+
+        def save(self):
+            pass
+
+    monkeypatch.setattr(finders, "resolve", lambda sel: ["derived-data", "sim-data"])
+    monkeypatch.setattr(
+        finders, "run", lambda cats, env, cfg: [f for f in found if f.category in cats]
+    )
+    monkeypatch.setattr(tui, "Sizer", FakeSizer)
+    b.loop()  # reads once at startup, starts the scan; q quits at once
+    b.wait(5)
+    assert b.disk == (390 * G, 1000 * G) and b.env.readings == [(410_500_000_000, 1000 * G)]
+    b.marked = {"derived-data:Dead-abc"}
+    next(f for f in b.findings if f.label == "Dead-abc").size = 5 * G
+    for _ in range(3):  # redraws reuse the reading
+        b.draw(b.rows())
+    assert scr.lines[1].endswith("  61% used · 390.0G free of 1.0T → up to 395.0G after marked")
+    assert "▒" in scr.lines[1]
+    monkeypatch.setattr(actions, "remove", lambda p, trash=False: "deleted")
+    b.act([f for f in b.findings if f.label == "Dead-abc"], trash=False)
+    b.draw(b.rows())
+    assert scr.lines[1].endswith("  59% used · 410.5G free of 1.0T")
+    assert b.env.readings == []
+
+
+def test_confirm_screen_lists_the_plan_and_any_other_key_goes_back(browser, monkeypatch):
+    b, scr = browser
+    acted = []
+    monkeypatch.setattr(b, "act", lambda marked, trash: acted.append(trash))
+    b.marked = {"derived-data:Dead-abc"}
+    scr.keys = [ord("n")]
+    b.confirm_and_act()
+    screen = scr.frames[-1]
+    assert (
+        screen[0]
+        == "about to run 1 action(s)    y  delete   t  move to ~/.Trash instead   any other key  back"
+    )
+    assert "delete /dd/Dead-abc" in "\n".join(screen.values())
+    assert screen[scr.h - 1] == "~/.Trash keeps the space until it is emptied"
+    assert acted == []
+    scr.keys = [ord("t")]
+    b.confirm_and_act()
+    assert acted == [True]

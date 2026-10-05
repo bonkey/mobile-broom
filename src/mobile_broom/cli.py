@@ -27,7 +27,7 @@ from . import __version__, actions, engine
 from .config import Config, config_path, load
 from .env import Env
 from .model import CATEGORY_GROUP, GROUPS
-from .render import render
+from .render import disk_text, render
 from .sizer import Sizer
 
 
@@ -104,6 +104,8 @@ def cmd_audit(args, env: Env, cfg: Config) -> int:
         sys.stdout.write("\n")
     else:
         render(findings)
+        if usage := env.disk_usage():
+            print(f"disk  {disk_text(usage)}")
         if env.simctl_error:
             print(f"\nwarning: {env.simctl_error}", file=sys.stderr)
     return 0

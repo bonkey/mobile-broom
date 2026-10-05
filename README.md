@@ -19,6 +19,7 @@ ios
     ...
 candidates: dead 42.3G (6) · stale 5.9G (1) · shared 11.5G (10) · review 50.5G (11)
   (each path sized on its own; APFS clones may overlap — not a reclaim promise)
+disk  52% used · 475.9G free of 994.6G
 ```
 
 ## Install
@@ -60,11 +61,16 @@ group · `n` unmark all · `d` act on marked (confirm screen shows the exact com
 
 The scan runs in the background, one worker per category: branches appear as their finder
 returns and sizes replace the `…` indicators one row at a time (same on `r`). You can move,
-expand and mark while it runs; `d` waits for the scan to finish. Every group and category
-row shows `total · dead · count`; every finding shows the date its verdict is based on
+expand and mark while it runs; `d` waits for the scan to finish. The top line shows the
+marked chip, the sort and the scan progress. Below it a bar shows the disk that holds your
+home folder (`█` used, `▒` marked, `░` free) with `NN% used · <free> free of <total>`; while
+anything is marked it adds `→ up to <free + marked> after marked`. That is a ceiling, not a
+promise: marked sizes are candidates, and `t` (move to `~/.Trash`) frees nothing until the
+Trash is emptied. The disk is read at startup, when a scan finishes and after `d`. The bottom
+line lists the action keys; `?` lists them all. Every group and category row shows `total · dead · count`; every finding shows the date its verdict is based on
 (last use or modification) and its age in days. Simulator categories (`sim-devices`,
 `sim-data`, `worktree-simulators`) group their devices under one heading per runtime,
-newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the bottom line says why
+newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the detail line under the tree says why
 (`locked: device is booted; shut it down first`), and space on it repeats the reason. On a
 booted simulator device space asks first, then runs `xcrun simctl shutdown <udid>` and marks it. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
@@ -84,6 +90,11 @@ VM disk image, …) — shown in the TUI, the text report and `--json`.
 
 Totals are labelled **candidates**: each path is sized on its own (`st_blocks`), so APFS
 clones can overlap and the sum is not a reclaim promise.
+
+The disk figures (TUI bar, last line of the text report; not in `--json`) are the `statvfs`
+free space of the volume that holds your home folder, the same figure `df` shows. Finder's "available"
+also counts purgeable space (local snapshots, evictable iCloud files), so it can read a few GB
+higher.
 
 ## What it checks and why
 

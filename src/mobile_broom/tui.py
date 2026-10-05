@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
 from .model import GROUPS, VERDICT_RANK, Finding, bucket_key, sort_key
-from .render import last_col
+from .render import disk_text, last_col
 from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
@@ -38,13 +38,21 @@ HELP = [
     ("s", "sort"),
     ("o", "reveal"),
     ("r", "rescan"),
-    ("?", "keys"),
+    ("?", "all keys"),
     ("q", "quit"),
 ]
+# the bottom line shows only the action keys; `?` lists all of HELP. When the line is too
+# narrow, chips go in DROP order (middle of the line first); `?` and `q` always stay.
+FOOTER = ["space", "a", "d", "s", "o", "r", "?", "q"]
+DROP = ["o", "s", "r", "a", "d", "space"]
+BAR_MIN, BAR_MAX = 10, 40  # disk bar width in cells
 LEGEND = [
     "[ ] removable — space marks it",
     "[x] marked",
-    "[-] locked — not removable; the bottom line says why (space offers to shut a booted sim down)",
+    (
+        "[-] locked — not removable; the detail line below the tree says why"
+        " (space offers to shut a booted sim down)"
+    ),
     "…   size not computed yet (rescan in progress)",
     "date column: last use/modification the verdict is based on, and its age in days",
 ]
@@ -99,6 +107,49 @@ def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
     return y
 
 
+def _footer(w: int) -> list[tuple[str, str]]:
+    """FOOTER as (key, desc) chips that fit one line of width `w`, spaced as _hints draws them."""
+    desc = dict(HELP)
+    keys = list(FOOTER)
+    for drop in DROP:
+        if sum(len(k) + len(desc[k]) + 5 for k in keys) - 2 < w:
+            break
+        keys.remove(drop)
+    return [(k, desc[k]) for k in keys]
+
+
+def _disk_line(usage: tuple[int, int], marked: int, w: int) -> list[tuple[str, str]]:
+    """'disk  ███▒░░  52% used · 475.9G free of 994.6G → up to 484.3G after marked' as
+    (text, part) pieces that fit `w`. The projection shows only while something is marked and
+    says "up to": marked sizes are candidates, and clones or shared files can free less.
+    Narrow terminals shrink the bar first, then drop 'of <total>', then shorten the projection
+    to '→ ≤484.3G', then the bar shrinks away. ▒ is the marked part of the used space, so it
+    ends where the projected free space begins. It is at least one cell, so a mark shows on a
+    large disk."""
+    free, total = usage
+    used = total - free
+    marked = min(marked, used)
+    texts = [disk_text(usage), disk_text(usage, of_total=False)]
+    if marked:
+        after = human(free + marked).strip()
+        long, short = f" → up to {after} after marked", f" → ≤{after}"
+        texts = [texts[0] + long, texts[1] + long, texts[1] + short]
+    for text in texts:
+        cells = min(BAR_MAX, w - 1 - len("disk    ") - len(text))
+        if cells >= BAR_MIN:
+            break
+    cells = max(0, cells)
+    u = round(cells * used / total)
+    m = max(1, u - round(cells * (used - marked) / total)) if marked and u else 0
+    return [
+        ("disk  ", "label"),
+        ("█" * (u - m), "used"),
+        ("▒" * m, "marked"),
+        ("░" * (cells - u), "free"),
+        (("  " if cells else "") + text, "text"),
+    ]
+
+
 def reveal(path: str) -> str | None:
     """Show `path` in Finder (selected in its parent) or the desktop's file manager.
     Returns an error message, or None."""
@@ -130,6 +181,7 @@ class Browser:
         self.cur = self.off = 0
         self.msg = ""
         self.status = ""  # collecting/sizing progress shown in the header
+        self.disk: tuple[int, int] | None = None  # (free, total) of HOME's volume, for the bar
         self.loading = False  # a background scan is filling self.findings
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
         self._lock = threading.Lock()  # guards findings/marked/status/progress counters
@@ -184,6 +236,12 @@ class Browser:
         if self._thread is not None:
             self._thread.join(timeout)
 
+    def read_disk(self):
+        """Read the disk bar's figures: at startup, when a scan finishes and after `d`.
+        Redraws reuse them."""
+        if self.env is not None:
+            self.disk = self.env.disk_usage()
+
     def stop(self, timeout: float = 10.0):
         """Abandon a running scan: queued tasks are dropped, walks in flight bail at their next
         directory, and the scan thread is joined so the interpreter has nothing left to wait
@@ -221,6 +279,7 @@ class Browser:
         sizer.save()  # whatever was sized before a stop is still a valid cache entry
         if self._stop.is_set():
             return
+        self.read_disk()
         with self._lock:
             self.marked &= {f.key for f in self.findings}
             self.loading = False
@@ -358,20 +417,25 @@ class Browser:
     def draw(self, rows):
         scr = self.scr
         scr.erase()
-        h, _w = scr.getmaxyx()
+        h, w = scr.getmaxyx()
         findings = self.findings
         marked = [f for f in findings if f.key in self.marked]
         msize = sum(f.size or 0 for f in marked)
-        head = f"mobile-broom — {len(findings)} findings · "
+        head = "mobile-broom  "
         chip = f" marked {len(marked)} · {human(msize).strip()} "
-        tail = f" · sort: {SORTS[self.sort][0]}"
+        tail = f"sort: {SORTS[self.sort][0]}"
         if self.status:
             tail += f"   ⟳ {self.status}"
         _put(scr, 0, 0, head, curses.A_BOLD)
         _put(scr, 0, len(head), chip, self.mark_attr)
-        _put(scr, 0, len(head) + len(chip), tail, curses.A_BOLD)
-        top = _hints(scr, 1, 0, HELP, self.key_attr) + 2  # hints may wrap; tree starts below
-        body = max(1, h - top - 3)
+        _put(scr, 0, max(len(head) + len(chip) + 2, w - 1 - len(tail)), tail, curses.A_BOLD)
+        disk = self.disk  # one snapshot: a finishing scan thread may replace it
+        if disk:
+            self.draw_disk(1, disk, msize)
+        # fixed heights: title, disk bar, blank line on top; rule, 2 detail lines, message
+        # and keys at the bottom
+        top = 3
+        body = max(1, h - top - 5)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
         self.off = min(self.off, self.cur)
         if self.cur >= self.off + body:
@@ -395,17 +459,37 @@ class Browser:
                 if row.pending:
                     text += " …"
                 _put(scr, y, 0, text, sel | (curses.A_BOLD if row.kind == "group" else 0))
-        # detail: evidence · action-or-lock · message
+        _put(scr, h - 5, 0, "─" * w, curses.A_DIM)
+        # detail: evidence · action-or-lock · message · keys
         if rows and rows[self.cur].kind == "finding":
             f = rows[self.cur].finding
-            _put(scr, h - 3, 0, f"— {f.evidence}", curses.A_DIM)
+            _put(scr, h - 4, 0, f"— {f.evidence}", curses.A_DIM)
             if f.action:
-                _put(scr, h - 2, 0, f"  {f.action.describe()}", curses.A_DIM)
+                _put(scr, h - 3, 0, f"  {f.action.describe()}", curses.A_DIM)
             else:
-                _put(scr, h - 2, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
+                _put(scr, h - 3, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
         if self.msg:
-            _put(scr, h - 1, 0, self.msg, curses.A_DIM)
+            _put(scr, h - 2, 0, self.msg, curses.A_DIM)
+        _hints(scr, h - 1, 0, _footer(w), self.key_attr)
         scr.refresh()
+
+    def draw_disk(self, y: int, usage: tuple[int, int], marked: int):
+        """The disk bar. The used part is green below 80% full, yellow below 90%, red above;
+        the glyphs alone still tell used, marked and free apart without colour."""
+        free, total = usage
+        full = (total - free) / total
+        attrs = {
+            "label": curses.A_BOLD,
+            "used": self.colors.get("ok" if full < 0.8 else "stale" if full < 0.9 else "dead", 0),
+            "marked": curses.A_BOLD,
+            "free": curses.A_DIM,
+            "text": 0,
+        }
+        x = 0
+        for text, part in _disk_line(usage, marked, self.scr.getmaxyx()[1]):
+            if text:
+                _put(self.scr, y, x, text, attrs[part])
+                x += len(text)
 
     # -- actions ---------------------------------------------------------
     def confirm_and_act(self):
@@ -430,6 +514,7 @@ class Browser:
         )
         for i, ln in enumerate(lines[: h - 3]):
             _put(scr, 2 + i, 0, ln)
+        _put(scr, h - 1, 0, "~/.Trash keeps the space until it is emptied", curses.A_DIM)
         scr.refresh()
         k = scr.getch()
         if k not in (ord("y"), ord("Y"), ord("t"), ord("T")):
@@ -489,6 +574,7 @@ class Browser:
         gone = {r.finding.key for r in results if r.ok}
         self.findings = [f for f in self.findings if f.key not in gone]
         self.marked -= gone
+        self.read_disk()
         draw(actions.summary(results), done=True)
         scr.getch()
         self.msg = actions.summary(results)
@@ -552,6 +638,7 @@ class Browser:
     def loop(self):
         curses.curs_set(0)
         self.scr.keypad(True)
+        self.read_disk()
         self.collect(refresh=self.refresh)
         while True:
             rows = self.rows()

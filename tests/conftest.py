@@ -30,6 +30,7 @@ class FakeEnv(Env):
         self.responses: dict[tuple, subprocess.CompletedProcess] = {}
         self.calls: list[list[str]] = []
         self.tools: dict[str, str] = {}
+        self.disk: tuple[int, int] | None = (400_000_000_000, 1_000_000_000_000)  # (free, total)
 
     def respond(self, argv: list[str], stdout="", returncode=0, stderr=""):
         if not isinstance(stdout, str):
@@ -45,6 +46,9 @@ class FakeEnv(Env):
 
     def which(self, name):
         return self.tools.get(name)
+
+    def disk_usage(self):
+        return self.disk
 
 
 @pytest.fixture

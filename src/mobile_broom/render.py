@@ -24,6 +24,13 @@ def last_col(dt: datetime | None) -> str:
     return f"{dt.date().isoformat()} {age:>4}d"
 
 
+def disk_text(usage: tuple[int, int], of_total: bool = True) -> str:
+    """'52% used · 475.9G free of 994.6G' from an Env.disk_usage() reading."""
+    free, total = usage
+    text = f"{round(100 * (total - free) / total)}% used · {human(free).strip()} free"
+    return text + (f" of {human(total).strip()}" if of_total else "")
+
+
 def _c(verdict: str, text: str, color: bool) -> str:
     return f"{COLORS[verdict]}{text}{RESET}" if color else text
 

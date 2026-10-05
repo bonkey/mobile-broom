@@ -110,6 +110,16 @@ class Env:
                 return str(cand)
         return None
 
+    # -- disk ------------------------------------------------------------
+    def disk_usage(self) -> tuple[int, int] | None:
+        """(free, total) bytes of the volume that holds HOME, from statvfs; None if unreadable.
+        On APFS free leaves out purgeable space, which Finder counts as available."""
+        try:
+            u = shutil.disk_usage(self.home)
+        except OSError:
+            return None
+        return (u.free, u.total) if u.total else None
+
     # -- simctl ----------------------------------------------------------
     def simctl_ok(self) -> bool:
         """Probe CoreSimulatorService once. Under a restrictive sandbox simctl fails

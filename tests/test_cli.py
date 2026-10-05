@@ -2,11 +2,13 @@ import io
 import json
 import plistlib
 import sys
+from types import SimpleNamespace
 
 import pytest
 from conftest import days_ago, mkfile
 
 from mobile_broom import cli
+from mobile_broom import env as env_mod
 
 
 def test_rewrite_argv_group_shorthand():
@@ -66,6 +68,45 @@ def test_audit_text_report(env, cfg, home, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "derived-data" in out and "Gone-xyz" in out and "candidates:" in out
+    assert out.splitlines()[-2:] == [
+        "  (each path sized on its own; APFS clones may overlap — not a reclaim promise)",
+        "disk  60% used · 400.0G free of 1.0T",
+    ]
+
+
+def test_audit_text_report_without_a_disk_reading(env, cfg, home, capsys):
+    env.disk = None
+    rc = cli.main(["audit", "avd"], env=env)
+    assert rc == 0 and capsys.readouterr().out == "nothing found\n"
+
+
+def test_audit_nothing_found_still_shows_disk_free(env, cfg, home, capsys):
+    rc = cli.main(["audit", "avd"], env=env)
+    assert (
+        rc == 0
+        and capsys.readouterr().out == "nothing found\ndisk  60% used · 400.0G free of 1.0T\n"
+    )
+
+
+def test_env_disk_usage_reads_the_home_volume(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_disk_usage(path):
+        seen.append(path)
+        return SimpleNamespace(total=1_000, used=600, free=400)
+
+    monkeypatch.setattr(env_mod.shutil, "disk_usage", fake_disk_usage)
+    assert env_mod.Env(home=tmp_path).disk_usage() == (400, 1_000)
+    assert seen == [tmp_path]
+
+    def unreadable(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(env_mod.shutil, "disk_usage", unreadable)
+    assert env_mod.Env(home=tmp_path).disk_usage() is None
+
+    monkeypatch.setattr(env_mod.shutil, "disk_usage", lambda p: SimpleNamespace(total=0, free=0))
+    assert env_mod.Env(home=tmp_path).disk_usage() is None  # no percentage of nothing
 
 
 def test_unknown_selector_dies(env, cfg, home):
