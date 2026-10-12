@@ -91,8 +91,8 @@ def browser(monkeypatch):
 def test_locked_finding_shows_reason_and_refuses_marking(browser):
     b, scr = browser
     rows = b.rows()
-    assert [r.kind for r in rows] == ["group", "cat", "finding", "cat", "finding"]
-    b.cur = 2  # the booted device (sim-data sorts before derived-data)
+    assert [r.kind for r in rows] == ["root", "group", "cat", "finding", "cat", "finding"]
+    b.cur = 3  # the booted device (sim-data sorts before derived-data)
     b.draw(rows)
     assert "[-] review" in scr.text()
     assert "locked: device is booted; shut it down first" in scr.text()
@@ -129,17 +129,17 @@ def test_space_on_booted_device_offers_shutdown_then_marks(browser):
     b, scr = browser
     f = _booted(b, RunEnv())
     rows = b.rows()
-    b.cur = 2
+    b.cur = 3
     scr.keys = [ord("y")]
     b.handle_key(ord(" "), rows)
     prompt = "\n".join(scr.frames[-2].values())
     assert "device is booted; shut it down first" in prompt and " y  run it, then mark" in prompt
     assert "$ xcrun simctl shutdown U1" in prompt
     assert b.env.calls == [["xcrun", "simctl", "shutdown", "U1"]]
-    assert b.marked == {f.key} and b.cur == 3 and b.msg == ""
+    assert b.marked == {f.key} and b.cur == 4 and b.msg == ""
     assert f.action.argv == ["xcrun", "simctl", "erase", "U1"]
     assert f.locked is None and f.unlock is None and f.evidence == "iOS 27; last booted today"
-    b.cur = 2
+    b.cur = 3
     b.draw(b.rows())
     assert "[x] review" in scr.text() and "xcrun simctl erase U1" in scr.text()
 
@@ -147,7 +147,7 @@ def test_space_on_booted_device_offers_shutdown_then_marks(browser):
 def test_declining_shutdown_leaves_device_locked(browser):
     b, scr = browser
     f = _booted(b, RunEnv())
-    b.cur = 2
+    b.cur = 3
     scr.keys = [ord("n")]
     b.handle_key(ord(" "), b.rows())
     assert b.env.calls == [] and b.marked == set() and f.unlock is not None
@@ -157,17 +157,17 @@ def test_declining_shutdown_leaves_device_locked(browser):
 def test_failed_shutdown_reports_and_stays_locked(browser):
     b, scr = browser
     f = _booted(b, RunEnv(returncode=164, stderr="Unable to shutdown device: Shutdown\n"))
-    b.cur = 2
+    b.cur = 3
     scr.keys = [ord("y")]
     b.handle_key(ord(" "), b.rows())
     assert b.marked == set() and f.action is None and f.locked and f.unlock is not None
     assert b.msg == "xcrun simctl shutdown U1 failed: Unable to shutdown device: Shutdown"
-    assert b.cur == 2
+    assert b.cur == 3
 
 
 def test_removable_finding_marks_and_shows_action(browser):
     b, scr = browser
-    b.cur = 4
+    b.cur = 5
     b.draw(b.rows())
     assert "[ ] dead" in scr.text() and "delete /dd/Dead-abc" in scr.text()
     scr.keys = [ord(" "), ord("q")]
@@ -185,6 +185,81 @@ def test_pending_sizes_show_indicator(browser):
     assert "⟳ sizing 0/1" in txt
     assert "…  " in txt and "Dead-abc" in txt  # size column indicator on the row
     assert "2 findings …" in txt and "derived-data  0B total · dead 0B · 1 findings …" in txt
+
+
+def _dim_lines(scr):
+    return {y for y, _t, a in scr.attrs if a & curses.A_DIM and 3 <= y < scr.h - 5}
+
+
+def test_rows_still_being_scanned_are_grey(browser):
+    """An unsized finding, every heading above it, and a group with a category whose finder
+    has not returned yet are drawn dim. Done rows keep their normal look."""
+    b, scr = browser
+    b.cur = 3
+    b.draw(b.rows())
+    assert _dim_lines(scr) == set()
+    b.findings[0].size = None  # Dead-abc, under ios/derived-data
+    scr.attrs.clear()
+    rows = b.rows()
+    b.draw(rows)
+    assert [r.key for r in rows] == [
+        "all",
+        "ios",
+        "ios/sim-data",
+        "sim-data:iPhone · iOS 27",
+        "ios/derived-data",
+        "derived-data:Dead-abc",
+    ]
+    assert _dim_lines(scr) == {3, 4, 7, 8}
+    b.findings[0].size = 10
+    b._collecting = frozenset({"archives"})  # an ios finder still running
+    scr.attrs.clear()
+    b.draw(b.rows())
+    assert _dim_lines(scr) == {3, 4}
+    assert scr.lines[4].endswith("2 findings …")
+
+
+def test_root_row_totals_everything_and_a_on_it_marks_all_dead(browser):
+    """The top `all` row totals every finding. `a` on it marks dead findings in every group,
+    `a` on a group only that group's; space on it marks everything removable. It does not
+    fold, and it is not drawn when nothing was found."""
+    b, scr = browser
+    b.findings.append(_finding("npm", "general", "old-npm", size=3))
+    b.findings.append(
+        Finding(
+            "gradle-caches",
+            "android",
+            "gradle",
+            ["/g"],
+            "e",
+            "stale",
+            size=2,
+            action=Action("remove", path="/g"),
+        )
+    )
+    b.findings.sort(key=tui.sort_key)
+    rows = b.rows()
+    assert (rows[0].kind, rows[0].key) == ("root", "all")
+    b.draw(rows)
+    assert scr.lines[3] == "> all  20B total · dead 13B · 4 findings"
+    dead = {"derived-data:Dead-abc", "npm:old-npm"}
+    b.handle_key(ord("a"), rows)
+    assert b.marked == dead
+    b.handle_key(ord("a"), rows)
+    assert b.marked == set()
+    b.cur = 1  # ios: scoped as before
+    b.handle_key(ord("a"), rows)
+    assert b.marked == {"derived-data:Dead-abc"}
+    b.marked.clear()
+    b.cur = 0
+    b.handle_key(ord(" "), rows)
+    assert b.marked == dead | {"gradle-caches:gradle"}
+    opened, closed = set(b.open), set(b.closed)
+    for k in (curses.KEY_RIGHT, curses.KEY_LEFT, ord("l"), ord("h")):
+        b.handle_key(k, rows)
+    assert (b.open, b.closed, b.rows()[0].key) == (opened, closed, "all")
+    b.findings = []
+    assert b.rows() == []
 
 
 def test_category_rows_show_dead_size_and_findings_show_last_date(browser):
@@ -253,10 +328,11 @@ def test_scan_runs_in_background_and_keys_work_meanwhile(browser, monkeypatch):
         threading.Event().wait(0.02)
     rows = b.rows()
     assert b.loading and "collecting 1/2" in b.status
-    assert [r.key for r in rows] == ["ios", "ios/derived-data", "derived-data:A-dd"]
-    b.handle_key(curses.KEY_DOWN, rows)
-    b.handle_key(curses.KEY_DOWN, rows)
-    assert b.cur == 2
+    assert [r.key for r in rows] == ["all", "ios", "ios/derived-data", "derived-data:A-dd"]
+    assert rows[0].pending and not rows[1].pending  # npm is still collecting
+    for _ in range(3):
+        b.handle_key(curses.KEY_DOWN, rows)
+    assert b.cur == 3
     b.handle_key(ord(" "), rows)  # marking works mid-scan
     assert b.marked == {"derived-data:A-dd"}
     b.handle_key(ord("d"), rows)
@@ -264,13 +340,15 @@ def test_scan_runs_in_background_and_keys_work_meanwhile(browser, monkeypatch):
     b.handle_key(ord("r"), rows)
     assert "already running" in b.msg
     # a tick anchors the cursor on the finding's key, then B lands and rows grow
-    b.cur = 2
+    b.cur = 3
     b.anchor = rows[b.cur].key
     release.set()
     b.wait(5)
     assert not b.loading and b.status == "" and "2 findings" in b.msg
     rows = b.rows()
+    assert not rows[0].pending
     assert [r.key for r in rows] == [
+        "all",
         "ios",
         "ios/derived-data",
         "derived-data:A-dd",
@@ -283,7 +361,7 @@ def test_scan_runs_in_background_and_keys_work_meanwhile(browser, monkeypatch):
     scr.keys = [ord("q")]
     b.collect = lambda refresh: None
     b.loop()
-    assert b.cur == 2 and rows[b.cur].key == "derived-data:A-dd"
+    assert b.cur == 3 and rows[b.cur].key == "derived-data:A-dd"
 
 
 def test_broken_finder_is_reported_not_fatal(browser, monkeypatch):
@@ -328,7 +406,7 @@ def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
     the message, the two detail lines and a dim rule. A narrow terminal drops chips from the
     middle of the line, keeps `?` and `q`, and never wraps."""
     b, scr = browser
-    b.cur = 4  # Dead-abc: both detail lines are drawn
+    b.cur = 5  # Dead-abc: both detail lines are drawn
     b.msg = "revealed /dd/Dead-abc"
     b.draw(b.rows())
     bottom = scr.h - 1  # (line 0's marked chip shares key_attr without colours)
@@ -346,11 +424,11 @@ def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
         " all keys",
         " quit",
     ]
-    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc".ljust(scr.w - 1 - 13) + "sort: verdict"
+    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc"
     assert scr.lines[bottom - 2] == "  delete /dd/Dead-abc"
     assert scr.lines[bottom - 3] == "— orphan"
     assert scr.lines[bottom - 4] == "-" * (scr.w - 1)
-    assert scr.lines[3].startswith("  ▾ ios")  # tree below title, disk bar and a blank line
+    assert scr.lines[4].startswith("  ▾ ios")  # tree below title, disk bar and sort line
     for w, keys in (
         (95, tui.FOOTER),
         (94, ["space", "a", "d", "s", "r", "?", "q"]),
@@ -399,6 +477,7 @@ def test_sim_devices_are_grouped_by_runtime(browser):
     b.open = {"ios", "ios/sim-devices"}
     rows = b.rows()
     assert [(r.kind, r.key) for r in rows] == [
+        ("root", "all"),
         ("group", "ios"),
         ("cat", "ios/sim-devices"),
         ("bucket", "ios/sim-devices/iOS 27.0"),
@@ -414,13 +493,13 @@ def test_sim_devices_are_grouped_by_runtime(browser):
     assert "▾ iOS 27.0  9B total · dead 5B · 2 findings" in txt
     assert "iPhone 17\n" in txt + "\n" and "iPhone 17 · iOS 27.0" not in txt  # suffix folded
     # space on the bucket marks everything in it; ← on a finding folds its bucket
-    b.cur = 2
+    b.cur = 3
     b.handle_key(ord(" "), rows)
     assert b.marked == {"sim-devices:iPhone 17 · iOS 27.0", "sim-devices:iPad · iOS 27.0"}
-    b.cur = 6
+    b.cur = 7
     b.handle_key(curses.KEY_LEFT, rows)
-    assert b.cur == 5 and "ios/sim-devices/iOS 26.0" in b.closed
-    assert [r.key for r in b.rows()][5:7] == [
+    assert b.cur == 6 and "ios/sim-devices/iOS 26.0" in b.closed
+    assert [r.key for r in b.rows()][6:8] == [
         "ios/sim-devices/iOS 26.0",
         "ios/sim-devices/watchOS 12.0",
     ]
@@ -433,10 +512,10 @@ def test_o_reveals_the_finding_path(browser, monkeypatch):
     calls = []
     monkeypatch.setattr(tui, "reveal", lambda p: calls.append(p))
     rows = b.rows()
-    b.cur = 0  # group row: nothing to reveal
+    b.cur = 1  # group row: nothing to reveal
     b.handle_key(ord("o"), rows)
     assert calls == [] and "nothing to reveal" in b.msg
-    b.cur = 4  # Dead-abc
+    b.cur = 5  # Dead-abc
     b.handle_key(ord("o"), rows)
     assert calls == ["/dd/Dead-abc"] and b.msg == "revealed /dd/Dead-abc"
 
@@ -470,9 +549,9 @@ def test_s_cycles_sort_within_a_branch(browser):
 
     assert labels() == ["mid-dead", "big-new", "small-old"]  # verdict, then size
     rows = b.rows()
-    b.cur = 3
+    b.cur = 4
     b.handle_key(ord("s"), rows)
-    assert labels() == ["big-new", "mid-dead", "small-old"] and b.anchor == rows[3].key
+    assert labels() == ["big-new", "mid-dead", "small-old"] and b.anchor == rows[4].key
     b.draw(b.rows())
     assert "sort: size ↓" in scr.text()
     b.handle_key(ord("s"), b.rows())
@@ -532,11 +611,12 @@ def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
 def test_marked_size_shows_in_tree_rows_and_header_chip(browser):
     b, scr = browser
     b.draw(b.rows())
-    assert "marked" not in scr.lines[3]  # nothing marked → rows stay as they were
+    assert "marked" not in scr.lines[4]  # nothing marked → rows stay as they were
     b.marked = {"derived-data:Dead-abc"}
     scr.attrs.clear()
     b.draw(b.rows())
     txt = scr.text()
+    assert "all  15B total · dead 10B · marked 10B · 2 findings" in txt
     assert "ios  15B total · dead 10B · marked 10B · 2 findings" in txt
     assert "derived-data  10B total · dead 10B · marked 10B · 1 findings" in txt
     assert "sim-data  5B total · dead 0B · 1 findings" in txt
@@ -548,41 +628,32 @@ G = 1_000_000_000
 
 
 def test_header_is_title_and_marked_chip_only(browser):
-    """Line 0: title and the marked chip; sort and scan progress live in the footer. No disk
-    reading: line 1 stays empty and the tree still starts on line 3."""
+    """Line 0: title and the marked chip. No disk reading: line 1 stays empty, line 2 holds
+    the sort, and the tree still starts on line 3."""
     b, scr = browser
-    b.status = "sizing 3/9"
     b.draw(b.rows())
     assert scr.lines[0] == "mobile-broom   marked 0 · 0B"
-    assert 1 not in scr.lines and 2 not in scr.lines and scr.lines[3].startswith("> ▾ ios")
+    assert 1 not in scr.lines and scr.lines[2] == "sort: verdict"
+    assert scr.lines[3].startswith("> all  ")
 
 
-def test_status_is_right_aligned_on_the_message_line_above_the_keys(browser):
-    """The message stays left; sort and scan progress sit flush right on the same line. When
-    they collide the message wins: sort goes first, then the progress. Never wraps."""
-    b, scr = browser
-    line = scr.h - 2
+def test_scan_progress_and_sort_sit_on_the_line_above_the_tree(colour_browser):
+    """Line 2, left: scan progress in the key colour, then the sort. The message line at the
+    bottom holds only the message."""
+    b, scr = colour_browser
+    b.findings = [_finding("npm", "general", "old-npm", size=3)]
+    b.status, b.msg = "collecting 3/20 · sizing 5/40", "revealed /dd/Dead-abc"
     b.draw(b.rows())
-    assert scr.lines[line] == "sort: verdict".rjust(scr.w - 1)
-    assert [a for y, t, a in scr.attrs if y == line] == [curses.A_BOLD]
-    b.status, b.msg = "sizing 3/9", "revealed /dd/Dead-abc"
-    status = "sort: verdict   ⟳ sizing 3/9"
+    assert scr.lines[2] == "⟳ collecting 3/20 · sizing 5/40   sort: verdict"
+    assert [a for y, _t, a in scr.attrs if y == 2] == [
+        b.colors["key"] | curses.A_BOLD,
+        curses.A_BOLD,
+    ]
+    assert scr.lines[scr.h - 2] == "revealed /dd/Dead-abc"
+    assert scr.lines[3].startswith("> all  ")
+    b.status = ""
     b.draw(b.rows())
-    assert scr.lines[line] == b.msg.ljust(scr.w - 1 - len(status)) + status
-    assert scr.lines[line + 1].startswith(" space  mark")  # keys stay on the last line
-    scr.w = 60
-    for msg, shown in (
-        ("x" * 29, status),  # 29 + 2 + 28 = 59: still fits
-        ("x" * 30, "⟳ sizing 3/9"),
-        ("x" * 45, "⟳ sizing 3/9"),
-        ("x" * 46, ""),
-    ):
-        b.msg = msg
-        b.draw(b.rows())
-        assert scr.lines[line] == (msg.ljust(59 - len(shown)) + shown).rstrip(), msg
-    b.status, b.msg = "", "x" * 46
-    b.draw(b.rows())
-    assert scr.lines[line] == "x" * 46  # no scan: sort alone is dropped
+    assert scr.lines[2] == "sort: verdict"
 
 
 @pytest.fixture

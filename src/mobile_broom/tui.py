@@ -53,7 +53,8 @@ LEGEND = [
         "[-] locked — not removable; the detail line below the tree says why"
         " (space offers to shut a booted sim down)"
     ),
-    "…   size not computed yet (rescan in progress)",
+    "…   grey: still being collected or sized (scan in progress)",
+    "all top row — space and a on it cover every finding",
     "date column: last use/modification the verdict is based on, and its age in days",
 ]
 ICON = {
@@ -185,15 +186,18 @@ class Browser:
         self.marked: set[str] = set()
         self.cur = self.off = 0
         self.msg = ""
-        self.status = ""  # collecting/sizing progress shown above the keys
+        self.status = ""  # collecting/sizing progress shown above the tree
         self.disk: tuple[int, int] | None = None  # (free, total) of HOME's volume, for the bar
         self.loading = False  # a background scan is filling self.findings
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
-        self._lock = threading.Lock()  # guards findings/marked/status/progress counters
+        self._lock = threading.Lock()  # guards findings/marked/status/progress/collecting
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()  # set on quit: workers bail out, walks abandon
         self._errors: list[str] = []
         self._prog = [0, 0, 0, 0]  # cats done, cats total, sized, to size
+        # categories whose finder has not returned; replaced, never mutated, so rows() can
+        # read it without the lock
+        self._collecting: frozenset[str] = frozenset()
         self.colors = {}
         self.key_attr = curses.A_BOLD | curses.A_REVERSE
         self.mark_attr = curses.A_BOLD | curses.A_REVERSE
@@ -270,12 +274,14 @@ class Browser:
             with self._lock:
                 self.loading = False
                 self.status = ""
+                self._collecting = frozenset()
 
     def _collect(self, refresh: bool):
         cats = finders.resolve(self.selectors)
         sizer = Sizer(refresh=refresh, stop=self._stop.is_set)
         with self._lock:
             self._prog[1] = len(cats)
+            self._collecting = frozenset(cats)
         self._set_status()
         ex = ThreadPoolExecutor(max_workers=sizer.workers, thread_name_prefix="mobile-broom")
         try:
@@ -314,6 +320,7 @@ class Browser:
         todo = [f for f in found if f.size is None and f.paths]
         with self._lock:
             self.findings = sorted(self.findings + found, key=sort_key)
+            self._collecting = self._collecting - {cat}
             self._prog[0] += 1
             self._prog[3] += len(todo)
         self._set_status()
@@ -346,7 +353,18 @@ class Browser:
     # -- rows ------------------------------------------------------------
     def rows(self) -> list[Row]:
         out: list[Row] = []
-        findings = self.findings  # one snapshot: the scan thread swaps the list, never mutates it
+        # snapshots: the scan thread swaps these, never mutates them
+        findings, collecting = self.findings, self._collecting
+        if not findings:
+            return out
+        out.append(
+            Row(
+                "root",
+                "all",
+                f"all  {_totals(findings, self.marked)}",
+                pending=bool(collecting) or any(f.size is None for f in findings),
+            )
+        )
         for g in GROUPS:
             gf = [f for f in findings if f.group == g]
             if not gf:
@@ -356,7 +374,7 @@ class Browser:
                     "group",
                     g,
                     f"{g}  {_totals(gf, self.marked)}",
-                    pending=any(f.size is None for f in gf),
+                    pending=bool(collecting & set(GROUPS[g])) or any(f.size is None for f in gf),
                 )
             )
             if g not in self.open:
@@ -381,7 +399,7 @@ class Browser:
                 order = SORTS[self.sort][1]
                 if buckets == [None]:
                     out.extend(
-                        Row("finding", f.key, f.label, finding=f, depth=2)
+                        Row("finding", f.key, f.label, f, depth=2, pending=f.size is None)
                         for f in sorted(cf, key=order)
                     )
                     continue
@@ -400,7 +418,7 @@ class Browser:
                     if bkey in self.closed:
                         continue
                     out.extend(
-                        Row("finding", f.key, f.label, finding=f, depth=3)
+                        Row("finding", f.key, f.label, f, depth=3, pending=f.size is None)
                         for f in sorted(bf, key=order)
                     )
         return out
@@ -439,8 +457,9 @@ class Browser:
         disk = self.disk  # one snapshot: a finishing scan thread may replace it
         if disk:
             self.draw_disk(1, disk, msize)
-        # fixed heights: title, disk bar, blank line on top; rule, 2 detail lines, message
-        # with the status flush right, and keys at the bottom
+        # fixed heights: title, disk bar, scan progress and sort on top; rule, 2 detail lines,
+        # message and keys at the bottom
+        self.draw_status(2)
         top = 3
         body = max(1, h - top - 5)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
@@ -451,21 +470,29 @@ class Browser:
             idx = self.off + i
             y = top + i
             sel = curses.A_REVERSE if idx == self.cur else 0
+            dim = curses.A_DIM if row.pending else 0  # still being collected or sized
             indent = "  " * row.depth
             if row.kind == "finding":
                 f = row.finding
                 mark = "x" if f.key in self.marked else (" " if f.action else "-")
                 attr = self.colors.get(f.verdict, 0)
-                _put(scr, y, 0, f"{'>' if idx == self.cur else ' '} {indent}[{mark}] ", sel)
+                _put(scr, y, 0, f"{'>' if idx == self.cur else ' '} {indent}[{mark}] ", sel | dim)
                 x = 2 + len(indent) + 4
-                _put(scr, y, x, f"{f.verdict:<6}", attr | sel)
-                _put(scr, y, x + 7, f"{_size(f.size)}  {last_col(f.last)}  {f.display_label}", sel)
+                _put(scr, y, x, f"{f.verdict:<6}", attr | sel | dim)
+                _put(
+                    scr,
+                    y,
+                    x + 7,
+                    f"{_size(f.size)}  {last_col(f.last)}  {f.display_label}",
+                    sel | dim,
+                )
             else:
-                arrow = "▾" if self.is_open(row) else "▸"
-                text = f"{'>' if idx == self.cur else ' '} {indent}{arrow} {row.label}"
+                arrow = "" if row.kind == "root" else "▾ " if self.is_open(row) else "▸ "
+                text = f"{'>' if idx == self.cur else ' '} {indent}{arrow}{row.label}"
                 if row.pending:
                     text += " …"
-                _put(scr, y, 0, text, sel | (curses.A_BOLD if row.kind == "group" else 0))
+                bold = curses.A_BOLD if row.kind in ("root", "group") else 0
+                _put(scr, y, 0, text, sel | (dim or bold))
         _put(scr, h - 5, 0, "-" * w, curses.A_DIM)  # ASCII: see _disk_line on `rep`
         # detail: evidence · action-or-lock · message · keys
         if rows and rows[self.cur].kind == "finding":
@@ -477,20 +504,17 @@ class Browser:
                 _put(scr, h - 3, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
         if self.msg:
             _put(scr, h - 2, 0, self.msg, curses.A_DIM)
-        self.draw_status(h - 2, w)
         _hints(scr, h - 1, 0, _footer(w), self.key_attr, chip_attrs=self.chip_attrs)
         scr.refresh()
 
-    def draw_status(self, y: int, w: int):
-        """Sort and scan progress, flush right on the message line. The message wins: when
-        they collide, sort goes first, then the progress."""
-        sort = f"sort: {SORTS[self.sort][0]}"
-        progress = f"⟳ {self.status}" if self.status else ""
-        room = w - 1 - (len(self.msg) + 2 if self.msg else 0)
-        for text in (f"{sort}   {progress}" if progress else sort, progress):
-            if text and len(text) <= room:
-                _put(self.scr, y, w - 1 - len(text), text, curses.A_BOLD)
-                return
+    def draw_status(self, y: int):
+        """Scan progress in the key colour, then the sort, left on the line above the tree."""
+        x = 0
+        if self.status:
+            progress = f"⟳ {self.status}   "
+            _put(self.scr, y, 0, progress, self.colors.get("key", 0) | curses.A_BOLD)
+            x = len(progress)
+        _put(self.scr, y, x, f"sort: {SORTS[self.sort][0]}", curses.A_BOLD)
 
     def draw_disk(self, y: int, usage: tuple[int, int], marked: int):
         """The disk bar: used is a solid reversed block, green below 80% full, yellow below
@@ -698,14 +722,14 @@ class Browser:
         elif k == curses.KEY_PPAGE:
             self.cur -= 10
         elif k in ENTER_KEYS or k in (curses.KEY_RIGHT, ord("l")):
-            if row.kind != "finding":
+            if row.kind not in ("finding", "root"):
                 self.toggle(row)
         elif k in (curses.KEY_LEFT, ord("h")):
             if row.kind == "finding":
                 parent = self.parent_key(row.finding)
                 self.cur = next(i for i, r in enumerate(rows) if r.key == parent)
                 self.close(rows[self.cur])
-            else:
+            elif row.kind != "root":
                 self.close(row)
         elif k == ord(" "):
             if row.kind == "finding":
@@ -748,7 +772,7 @@ class Browser:
         return True
 
     def _toggle_all(self, row, pred):
-        if row is None:
+        if row is None or row.kind == "root":
             pool = self.findings
         elif row.kind == "group":
             pool = [f for f in self.findings if f.group == row.key]
