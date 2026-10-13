@@ -15,6 +15,7 @@ GROUPS: dict[str, list[str]] = {
         "runtimes",
         "sim-devices",
         "sim-data",
+        "xctest-devices",
         "device-support",
         "derived-data",
         "derived-data-shared",

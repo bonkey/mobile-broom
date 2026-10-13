@@ -8,7 +8,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from ..model import Action, Finding, Unlock
+from ..model import Action, Finding, Unlock, as_utc
 from . import register
 from ._util import age_days, build_key, file_url_path, listdir, mtime_of, version_tuple, when
 
@@ -307,6 +307,92 @@ def find_sim_data(env, cfg):
             locked=locked,
             extra={"udid": d.get("udid"), "state": state, "last_booted": last},
             unlock=unlock,
+        )
+
+
+@register("xctest-devices")
+def find_xctest_devices(env, cfg):
+    root = env.library / "Developer" / "XCTestDevices"
+    names = listdir(root)
+    if not names:
+        return
+    data = env.run_json(["xcrun", "simctl", "--set", str(root), "list", "devices", "--json"])
+    listed = data.get("devices") if isinstance(data, dict) else None
+    devices = {
+        d.get("udid"): d | {"runtime": rt}
+        for rt, ds in (listed.items() if isinstance(listed, dict) else [])
+        for d in (ds if isinstance(ds, list) else [])
+        if isinstance(d, dict) and d.get("udid")
+    }
+    for udid in names:
+        path = root / udid
+        if not path.is_dir() and not path.is_symlink():
+            continue
+        info = {}
+        try:
+            with (path / "device.plist").open("rb") as fh:
+                info = plistlib.load(fh)
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            pass
+        if not isinstance(info, dict):
+            info = {}
+        d = devices.get(udid)
+        label = (d or info).get("name") or udid
+        last, source = (
+            last_boot(d)
+            if d and isinstance(d.get("dataPath"), str)
+            else ((d or {}).get("lastBootedAt"), "lastBootedAt")
+        )
+        try:
+            last = as_utc(last)
+        except (AttributeError, OverflowError, TypeError, ValueError):
+            last = None
+        state = d.get("state") if d else None
+        action = None
+        verdict = "review"
+        locked = None
+        if not isinstance(listed, dict):
+            locked = "simctl could not inspect the XCTest device set"
+        elif path.is_symlink() or info.get("UDID") != udid:
+            locked = "device directory or plist identity cannot be verified"
+        elif not d:
+            locked = "device not listed by simctl in the XCTest device set"
+        elif d.get("dataPath") != str(path / "data"):
+            locked = "simctl data path does not match this device directory"
+        elif state != "Shutdown":
+            locked = f"device state {state or 'unknown'}; shut it down before cleaning"
+        elif d.get("isAvailable") is False:
+            verdict = "dead"
+        elif last is None:
+            locked = "no reliable last boot record"
+        elif age_days(last) > cfg.stale_days:
+            verdict = "stale"
+        else:
+            locked = f"used within {cfg.stale_days}d"
+        if verdict in ("dead", "stale"):
+            action = Action(
+                kind="argv", argv=["xcrun", "simctl", "--set", str(root), "delete", udid]
+            )
+        yield Finding(
+            category="xctest-devices",
+            group="ios",
+            label=f"{label} · {udid}",
+            bucket=runtime_name(d.get("runtime", "")) if d else None,
+            paths=[str(path)],
+            evidence=(
+                f"{state or 'unknown state'}; "
+                + (f"last booted {when(last)} ({source})" if last else "no last boot record")
+                + (
+                    f"; unavailable: {d.get('availabilityError') or 'runtime unavailable'}"
+                    if d and d.get("isAvailable") is False
+                    else ""
+                )
+            ),
+            last=last,
+            verdict=verdict,
+            action=action,
+            locked=locked,
+            extra={"udid": udid, "state": state},
         )
 
 
