@@ -31,7 +31,7 @@ HELP = [
     ("↑↓ jk", "move"),
     ("→ ⏎", "expand one level"),
     ("← h", "collapse"),
-    ("f", "expand all levels below; again: fold the findings away"),
+    ("e", "expand all levels"),
     ("space", "mark / unmark (on a heading: everything under it)"),
     ("a", "mark dead"),
     ("d", "act"),
@@ -433,7 +433,7 @@ class Browser:
         return f"{key}/{f.bucket}" if f.bucket else key
 
     def fold_all(self, rows: list[Row], row: Row):
-        """`f` on a heading: while any finding under it is hidden, open everything under it;
+        """`e` on a heading: while any finding under it is hidden, open everything under it;
         once they all show, close the row each of them hangs from (its bucket, or its
         category). On a finding it acts on the finding's own branch. Other branches keep their
         state. The cursor stays on its row, or moves to the parent of the finding it was on."""
@@ -767,7 +767,7 @@ class Browser:
                 self.close(rows[self.cur])
             elif row.kind != "root":
                 self.close(row)
-        elif k == ord("f"):
+        elif k == ord("e"):
             self.fold_all(rows, row)
         elif k == ord(" "):
             if row.kind == "finding":

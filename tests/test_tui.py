@@ -570,8 +570,8 @@ def test_s_cycles_sort_within_a_branch(browser):
     assert labels() == ["mid-dead", "big-new", "small-old"]
 
 
-def test_f_folds_and_unfolds_only_the_branch_under_the_cursor(browser):
-    """`f` on a heading opens everything under it while any finding there is hidden. Once they
+def test_e_expands_and_folds_only_the_branch_under_the_cursor(browser):
+    """`e` on a heading opens everything under it while any finding there is hidden. Once they
     all show, it closes the row each of them hangs from, so categories and runtime buckets stay
     listed. Siblings keep their state. On `all` it covers the whole tree; on a finding, the
     finding's own branch. The cursor keeps its row, or moves to the finding's parent."""
@@ -591,7 +591,7 @@ def test_f_folds_and_unfolds_only_the_branch_under_the_cursor(browser):
     def f_on(key):
         rows = b.rows()
         b.cur = next(i for i, r in enumerate(rows) if r.key == key)
-        b.handle_key(ord("f"), rows)
+        b.handle_key(ord("e"), rows)
 
     def shown():
         return [r.key for r in b.rows() if r.kind == "finding"]
@@ -818,7 +818,7 @@ def test_marking_keys_are_yellow_and_d_is_red(colour_browser):
     keys = {t.strip(): a for y, t, a in scr.attrs if a & curses.A_REVERSE}
     assert list(keys) == [k for k, _d in tui.HELP]
     assert keys["space"] == keys["a"] == b.mark_attr and keys["d"] == red
-    assert {keys[k] for k in ("↑↓ jk", "f", "s", "?", "q")} == {b.key_attr}
+    assert {keys[k] for k in ("↑↓ jk", "e", "s", "?", "q")} == {b.key_attr}
     assert len({b.mark_attr, red, b.key_attr}) == 3
 
 
