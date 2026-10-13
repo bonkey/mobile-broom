@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
 from .model import GROUPS, VERDICT_RANK, Finding, bucket_key, sort_key
-from .render import disk_text, last_col
+from .render import last_col
 from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
@@ -39,23 +39,17 @@ HELP = [
     ("s", "sort"),
     ("o", "reveal"),
     ("r", "rescan"),
-    ("?", "all keys"),
+    ("?", "keys"),
     ("q", "quit"),
 ]
-# the bottom line shows only the action keys; `?` lists all of HELP. When the line is too
-# narrow, chips go in DROP order (middle of the line first); `?` and `q` always stay.
-FOOTER = ["space", "a", "d", "s", "o", "r", "?", "q"]
-DROP = ["o", "s", "r", "a", "d", "space"]
-BAR_MIN, BAR_MAX = 10, 40  # disk bar width in cells
 LEGEND = [
     "[ ] removable — space marks it",
     "[x] marked",
-    (
-        "[-] locked — not removable; the detail line below the tree says why"
-        " (space offers to shut a booted sim down)"
-    ),
+    "[-] locked — not removable; the lines at the bottom say why",
+    "    (space offers to shut a booted sim down)",
     "…   grey: still being collected or sized (scan in progress)",
     "all top row — space and a on it cover every finding",
+    "    free → N: the free space once the marked findings are gone is at most N",
     "date column: last use/modification the verdict is based on, and its age in days",
 ]
 ICON = {
@@ -86,13 +80,39 @@ def _totals(fs: list[Finding], marked: set[str]) -> str:
     dead = sum(f.size or 0 for f in fs if f.verdict == "dead")
     picked = [f for f in fs if f.key in marked]
     mark = f" · marked {human(sum(f.size or 0 for f in picked)).strip()}" if picked else ""
-    return f"{human(total).strip()} total · dead {human(dead).strip()}{mark} · {len(fs)} findings"
+    return f"{human(total).strip()} total · dead {human(dead).strip()}{mark}"
 
 
-def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD, chip_attrs=None) -> int:
+def _free(usage: tuple[int, int], marked: int) -> str:
+    """'444.0G free', plus '→ 456.2G' while something is marked: the free space once the
+    marked findings are gone. That is a ceiling: marked sizes are candidates, and clones or
+    shared files can free less. The marked part is capped at the used space."""
+    free, total = usage
+    text = f"{human(free).strip()} free"
+    if marked:
+        text += f" → {human(free + min(marked, total - free)).strip()}"
+    return text
+
+
+def _controls(status: str, sort: str, room: int) -> list[tuple[str, str]]:
+    """The right end of the `all` row as (text, part) pieces drawn three spaces apart: scan
+    progress, sort, `?` chip. When they need more than `room` columns, the progress goes
+    first, then the sort. The `?` chip always stays."""
+    pieces = [(f"⟳ {status}", "status")] if status else []
+    pieces += [(f"sort: {sort}", "sort"), (" ? ", "help")]
+    while len(pieces) > 1 and sum(len(t) + 3 for t, _p in pieces) - 3 > room:
+        pieces.pop(0)
+    return pieces
+
+
+def _edge(title: str, width: int) -> str:
+    """'+-- title -----+', `width` columns wide."""
+    return ("+--" + title).ljust(width - 1, "-")[: width - 1] + "+"
+
+
+def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD) -> int:
     """Draw `lead` then `[key] desc` pairs, keys as chips, wrapping to the next line when
-    the terminal is too narrow. `chip_attrs` overrides `key_attr` per key. Returns the y of
-    the last line used."""
+    the terminal is too narrow. Returns the y of the last line used."""
     _h, w = scr.getmaxyx()
     if lead:
         _put(scr, y, x, lead, lead_attr)
@@ -103,58 +123,11 @@ def _hints(scr, y, x, items, key_attr, lead="", lead_attr=curses.A_BOLD, chip_at
         if x + len(key) + len(desc) + 4 > w:
             y, x = y + 1, 0
         chip = f" {key} "
-        _put(scr, y, x, chip, (chip_attrs or {}).get(key, key_attr))
+        _put(scr, y, x, chip, key_attr)
         x += len(chip)
         _put(scr, y, x, f" {desc}", curses.A_DIM)
         x += len(desc) + 1
     return y
-
-
-def _footer(w: int) -> list[tuple[str, str]]:
-    """FOOTER as (key, desc) chips that fit one line of width `w`, spaced as _hints draws them."""
-    desc = dict(HELP)
-    keys = list(FOOTER)
-    for drop in DROP:
-        if sum(len(k) + len(desc[k]) + 5 for k in keys) - 2 < w:
-            break
-        keys.remove(drop)
-    return [(k, desc[k]) for k in keys]
-
-
-def _disk_line(usage: tuple[int, int], marked: int, w: int) -> list[tuple[str, str]]:
-    """'disk  [used][:::]......  52% used · 475.9G free of 994.6G → up to 484.3G after marked'
-    as (text, part) pieces that fit `w`. The bar is ASCII only: draw_disk shows used as
-    reversed spaces and marked as reversed ':'. A run of one non-ASCII character would let
-    ncurses send it with terminfo `rep`, and macOS's ncurses 6.0 then sends only its low byte,
-    which a terminal shows as one invalid character per cell. The projection shows only while
-    something is marked and says "up to": marked sizes are candidates, and clones or shared
-    files can free less.
-    Narrow terminals shrink the bar first, then drop 'of <total>', then shorten the projection
-    to '→ ≤484.3G', then the bar shrinks away. The marked part is carved from the used part,
-    so it ends where the projected free space begins. It is at least one cell, so a mark shows
-    on a large disk."""
-    free, total = usage
-    used = total - free
-    marked = min(marked, used)
-    texts = [disk_text(usage), disk_text(usage, of_total=False)]
-    if marked:
-        after = human(free + marked).strip()
-        long, short = f" → up to {after} after marked", f" → ≤{after}"
-        texts = [texts[0] + long, texts[1] + long, texts[1] + short]
-    for text in texts:
-        cells = min(BAR_MAX, w - 1 - len("disk    ") - len(text))
-        if cells >= BAR_MIN:
-            break
-    cells = max(0, cells)
-    u = round(cells * used / total)
-    m = max(1, u - round(cells * (used - marked) / total)) if marked and u else 0
-    return [
-        ("disk  ", "label"),
-        (" " * (u - m), "used"),
-        (":" * m, "marked"),
-        ("." * (cells - u), "free"),
-        (("  " if cells else "") + text, "text"),
-    ]
 
 
 def reveal(path: str) -> str | None:
@@ -220,7 +193,7 @@ class Browser:
             self.colors["review"] = curses.A_DIM
             self.key_attr = self.colors["key"] | curses.A_BOLD | curses.A_REVERSE
             self.mark_attr = self.colors["stale"] | curses.A_BOLD | curses.A_REVERSE
-        # marking keys look like the marked chip; `d` deletes, so it is red
+        # marking keys are yellow; `d` deletes, so it is red
         self.chip_attrs = {
             "space": self.mark_attr,
             "a": self.mark_attr,
@@ -302,11 +275,8 @@ class Browser:
             self.marked &= {f.key for f in self.findings}
             self.loading = False
             self.status = ""
-            bits = [f"{len(self.findings)} findings"]
-            if self.env is not None and self.env.simctl_error:
-                bits.append(self.env.simctl_error)
-            bits.extend(self._errors)
-            self.msg = " · ".join(bits)
+            bits = [self.env.simctl_error] if self.env is not None and self.env.simctl_error else []
+            self.msg = " · ".join(bits + self._errors)
 
     def _load_cat(self, cat: str, sizer: Sizer, ex: ThreadPoolExecutor) -> list[Future]:
         """Run one finder, publish its findings, queue their sizing. Never blocks on sizing."""
@@ -362,7 +332,7 @@ class Browser:
             Row(
                 "root",
                 "all",
-                f"all  {_totals(findings, self.marked)}",
+                "all",  # draw_header writes this row's text
                 pending=bool(collecting) or any(f.size is None for f in findings),
             )
         )
@@ -467,24 +437,13 @@ class Browser:
     def draw(self, rows):
         scr = self.scr
         scr.erase()
-        h, w = scr.getmaxyx()
-        findings = self.findings
-        marked = [f for f in findings if f.key in self.marked]
-        msize = sum(f.size or 0 for f in marked)
-        head = "mobile-broom  "
-        chip = f" marked {len(marked)} · {human(msize).strip()} "
-        _put(scr, 0, 0, head, curses.A_BOLD)
-        _put(scr, 0, len(head), chip, self.mark_attr)
-        disk = self.disk  # one snapshot: a finishing scan thread may replace it
-        if disk:
-            self.draw_disk(1, disk, msize)
-        # fixed heights: title, disk bar, scan progress and sort on top; rule, 2 detail lines,
-        # message and keys at the bottom
-        self.draw_status(2)
-        top = 3
-        body = max(1, h - top - 5)
+        h, _w = scr.getmaxyx()
+        self.draw_header(rows[0] if rows else None)
+        # fixed heights: the `all` row on top; message, evidence and action-or-lock at the bottom
+        top = 1
+        body = max(1, h - top - 3)
         self.cur = max(0, min(self.cur, max(0, len(rows) - 1)))
-        self.off = min(self.off, self.cur)
+        self.off = max(1, min(self.off, self.cur))
         if self.cur >= self.off + body:
             self.off = self.cur - body + 1
         for i, row in enumerate(rows[self.off : self.off + body]):
@@ -508,54 +467,52 @@ class Browser:
                     sel | dim,
                 )
             else:
-                arrow = "" if row.kind == "root" else "▾ " if self.is_open(row) else "▸ "
+                arrow = "▾ " if self.is_open(row) else "▸ "
                 text = f"{'>' if idx == self.cur else ' '} {indent}{arrow}{row.label}"
                 if row.pending:
                     text += " …"
-                bold = curses.A_BOLD if row.kind in ("root", "group") else 0
+                bold = curses.A_BOLD if row.kind == "group" else 0
                 _put(scr, y, 0, text, sel | (dim or bold))
-        _put(scr, h - 5, 0, "-" * w, curses.A_DIM)  # ASCII: see _disk_line on `rep`
-        # detail: evidence · action-or-lock · message · keys
+        if self.msg:
+            _put(scr, h - 3, 0, self.msg)
         if rows and rows[self.cur].kind == "finding":
             f = rows[self.cur].finding
-            _put(scr, h - 4, 0, f"— {f.evidence}", curses.A_DIM)
+            _put(scr, h - 2, 0, f"— {f.evidence}", curses.A_DIM)
             if f.action:
-                _put(scr, h - 3, 0, f"  {f.action.describe()}", curses.A_DIM)
+                _put(scr, h - 1, 0, f"  {f.action.describe()}", curses.A_DIM)
             else:
-                _put(scr, h - 3, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
-        if self.msg:
-            _put(scr, h - 2, 0, self.msg, curses.A_DIM)
-        _hints(scr, h - 1, 0, _footer(w), self.key_attr, chip_attrs=self.chip_attrs)
+                _put(scr, h - 1, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
         scr.refresh()
 
-    def draw_status(self, y: int):
-        """Scan progress in the key colour, then the sort, left on the line above the tree."""
-        x = 0
-        if self.status:
-            progress = f"⟳ {self.status}   "
-            _put(self.scr, y, 0, progress, self.colors.get("key", 0) | curses.A_BOLD)
-            x = len(progress)
-        _put(self.scr, y, x, f"sort: {SORTS[self.sort][0]}", curses.A_BOLD)
-
-    def draw_disk(self, y: int, usage: tuple[int, int], marked: int):
-        """The disk bar: used is a solid reversed block, green below 80% full, yellow below
-        90%, red above; marked is a reversed ':' block; free is a dim dotted track. Without
-        colour the three still read apart."""
-        free, total = usage
-        full = (total - free) / total
+    def draw_header(self, root: Row | None):
+        """Line 0 is the `all` row, pinned while the tree scrolls: totals and free space on the
+        left; scan progress, sort and the `?` chip at the right end. It is drawn before the
+        first finding lands too. When even the chip alone does not fit beside the totals, the
+        totals are cut short."""
+        scr = self.scr
+        _h, w = scr.getmaxyx()
+        findings, disk = self.findings, self.disk  # snapshots: the scan thread replaces them
+        parts = [_totals(findings, self.marked)] if findings else []
+        if disk:
+            marked = sum(f.size or 0 for f in findings if f.key in self.marked)
+            parts.append(_free(disk, marked))
+        sel = root is not None and self.cur == 0
+        left = f"{'>' if sel else ' '} all  {' · '.join(parts)}".rstrip()
+        pending = root.pending if root else self.loading
+        if pending:
+            left += " …"
+        right = _controls(self.status, SORTS[self.sort][0], w - 3 - len(left))
+        x = w - 1 - sum(len(t) + 3 for t, _p in right) + 3
+        attr = (curses.A_REVERSE if sel else 0) | (curses.A_DIM if pending else curses.A_BOLD)
+        _put(scr, 0, 0, left[: max(0, x - 2)], attr)
         attrs = {
-            "label": curses.A_BOLD,
-            "used": curses.A_REVERSE
-            | self.colors.get("ok" if full < 0.8 else "stale" if full < 0.9 else "dead", 0),
-            "marked": curses.A_BOLD | curses.A_REVERSE,
-            "free": curses.A_DIM,
-            "text": 0,
+            "status": self.colors.get("key", 0) | curses.A_BOLD,
+            "sort": curses.A_BOLD,
+            "help": self.key_attr,
         }
-        x = 0
-        for text, part in _disk_line(usage, marked, self.scr.getmaxyx()[1]):
-            if text:
-                _put(self.scr, y, x, text, attrs[part])
-                x += len(text)
+        for text, part in right:
+            _put(scr, 0, x, text, attrs[part])
+            x += len(text) + 3
 
     # -- actions ---------------------------------------------------------
     def confirm_and_act(self):
@@ -685,20 +642,48 @@ class Browser:
         scr.refresh()
         scr.getch()
 
-    def show_keys(self):
+    def draw_keys(self):
+        """The `?` box over the screen: every key as a chip with what it does, then what the
+        marks mean. The border is ASCII: ncurses may send a run of one character as the
+        character plus terminfo `rep`, and macOS's ncurses 6.0 then sends only the low byte of
+        a non-ASCII one, which a terminal shows as one invalid character per cell."""
         scr = self.scr
-        scr.erase()
-        _hints(scr, 0, 0, [("any key", "continue")], self.key_attr, lead="keys   ")
-        width = max(len(k) for k, _d in HELP) + 2
-        for i, (key, desc) in enumerate(HELP):
-            _put(scr, 2 + i, 2, f" {key} ".ljust(width), self.chip_attrs.get(key, self.key_attr))
-            _put(scr, 2 + i, 2 + width + 1, desc)
-        y = 3 + len(HELP)
-        _put(scr, y, 0, "marks", curses.A_BOLD)
-        for i, ln in enumerate(LEGEND):
-            _put(scr, y + 1 + i, 2, ln)
-        scr.refresh()
-        scr.getch()
+        h, w = scr.getmaxyx()
+        kw = max(len(k) for k, _d in HELP) + 2  # chip width
+        lines = [("key", k, d) for k, d in HELP] + [
+            ("text", "", 0),
+            ("text", "marks", curses.A_BOLD),
+        ]
+        lines += [("text", ln, 0) for ln in LEGEND]
+        inner = max(kw + 1 + max(len(d) for _k, d in HELP), *(len(ln) for ln in LEGEND))
+        bw = min(w - 1, inner + 6)  # "|  " + inner + "  |"
+        inner = bw - 6
+        bh = min(h, len(lines) + 2)
+        y0, x0 = (h - bh) // 2, (w - 1 - bw) // 2
+        _put(scr, y0, x0, _edge(" keys ", bw), curses.A_BOLD)
+        # left to right, so each line ends with its right border
+        for i, (kind, a, b) in enumerate(lines[: bh - 2]):
+            y = y0 + 1 + i
+            _put(scr, y, x0, "|  ")
+            if kind == "key":
+                _put(
+                    scr,
+                    y,
+                    x0 + 3,
+                    f" {a} ".ljust(kw)[:inner],
+                    self.chip_attrs.get(a, self.key_attr),
+                )
+                _put(scr, y, x0 + 3 + kw, f" {b}".ljust(inner - kw)[: max(0, inner - kw)])
+            else:
+                _put(scr, y, x0 + 3, a.ljust(inner)[:inner], b)
+            _put(scr, y, x0 + bw - 3, "  |")
+        _put(scr, y0 + bh - 1, x0, _edge(" any key closes ", bw))
+
+    def show_keys(self):
+        self.draw_keys()
+        self.scr.refresh()
+        self.scr.timeout(-1)  # the loop ticks while a scan runs; wait for a real key here
+        self.scr.getch()
 
     # -- loop ------------------------------------------------------------
     def loop(self):
@@ -732,6 +717,9 @@ class Browser:
         self.msg = ""
         if k in (ord("q"), 27):
             return False
+        if k == ord("?"):
+            self.show_keys()
+            return True
         if row is None:
             return True
         if k in (curses.KEY_UP, ord("k")):
@@ -790,8 +778,6 @@ class Browser:
                 self.msg = "scan already running"
             else:
                 self.collect(refresh=True)
-        elif k == ord("?"):
-            self.show_keys()
         return True
 
     def _under(self, row) -> list[Finding]:

@@ -62,20 +62,20 @@ the heading (on the top `all` row: everywhere) · `n` unmark all · `d` act on m
 The scan runs in the background, one worker per category: branches appear as their finder
 returns, and rows still being collected or sized are grey with a `…` until their sizes land
 (same on `r`). You can move,
-expand and mark while it runs; `d` waits for the scan to finish. The top line shows the
-marked chip. Below it a bar shows the disk that holds your
-home folder (a solid block used, `:` marked, `.` free) with `NN% used · <free> free of <total>`; while
-anything is marked it adds `→ up to <free + marked> after marked`. That is a ceiling, not a
-promise: marked sizes are candidates, and `t` (move to `~/.Trash`) frees nothing until the
-Trash is emptied. The disk is read at startup, when a scan finishes and after `d`. The bottom
-line lists the action keys (marking keys in the marked chip's yellow, `d` in red; `?` lists
-them all); the line above it holds the last message. The line right above the tree shows the
-scan progress (`⟳ collecting 7/27 · sizing 12/40`) and the sort. The top `all` row and every
-group and category row show `total · dead · count`; space or `a` on `all` covers every
-finding. Every finding shows the date its verdict is based on
+expand and mark while it runs; `d` waits for the scan to finish. The top line is the `all`
+row, which stays in place while the tree scrolls. It shows `total · dead · marked` for every
+finding and the free space on the disk that holds your home folder (`444.0G free`). While
+anything is marked it adds `→ <free + marked>`. That is a ceiling, not a promise: marked sizes
+are candidates, and `t` (move to `~/.Trash`) frees nothing until the Trash is emptied. The disk
+is read at startup, when a scan finishes and after `d`. At its right end are the scan progress
+(`⟳ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
+every key (marking keys in yellow, `d` in red) and what the marks mean. Every group and category
+row shows `total · dead`, plus `marked` once something under it is marked; space or `a` on `all`
+covers every finding. The last three lines hold the last message, then the selected finding's
+evidence and its action. Every finding shows the date its verdict is based on
 (last use or modification) and its age in days. Simulator categories (`sim-devices`,
 `sim-data`, `worktree-simulators`) group their devices under one heading per runtime,
-newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the detail line under the tree says why
+newest first; the heading takes space/`a` like a category and `←` folds it. `[-]` marks a finding that cannot be acted on; the last line says why
 (`locked: device is booted; shut it down first`), and space on it repeats the reason. On a
 booted simulator device space asks first, then runs `xcrun simctl shutdown <udid>` and marks it. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
@@ -96,7 +96,7 @@ VM disk image, …) — shown in the TUI, the text report and `--json`.
 Totals are labelled **candidates**: each path is sized on its own (`st_blocks`), so APFS
 clones can overlap and the sum is not a reclaim promise.
 
-The disk figures (TUI bar, last line of the text report; not in `--json`) are the `statvfs`
+The disk figures (TUI `all` row, last line of the text report; not in `--json`) are the `statvfs`
 free space of the volume that holds your home folder, the same figure `df` shows. Finder's "available"
 also counts purgeable space (local snapshots, evictable iCloud files), so it can read a few GB
 higher.

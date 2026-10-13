@@ -27,6 +27,7 @@ class FakeScreen:
         self.attrs: list[tuple] = []
         self.frames: list[dict[int, str]] = []
         self.keys: list[int] = []
+        self.delay = None
 
     def getmaxyx(self):
         return self.h, self.w
@@ -48,8 +49,8 @@ class FakeScreen:
     def keypad(self, _flag):
         pass
 
-    def timeout(self, _ms):
-        pass
+    def timeout(self, ms):
+        self.delay = ms
 
     def text(self):
         return "\n".join(self.lines[y] for y in sorted(self.lines))
@@ -184,11 +185,11 @@ def test_pending_sizes_show_indicator(browser):
     txt = scr.text()
     assert "⟳ sizing 0/1" in txt
     assert "…  " in txt and "Dead-abc" in txt  # size column indicator on the row
-    assert "2 findings …" in txt and "derived-data  0B total · dead 0B · 1 findings …" in txt
+    assert "> all  5B total · dead 0B …  " in txt and "derived-data  0B total · dead 0B …" in txt
 
 
 def _dim_lines(scr):
-    return {y for y, _t, a in scr.attrs if a & curses.A_DIM and 3 <= y < scr.h - 5}
+    return {y for y, _t, a in scr.attrs if a & curses.A_DIM and y < scr.h - 3}
 
 
 def test_rows_still_being_scanned_are_grey(browser):
@@ -210,13 +211,13 @@ def test_rows_still_being_scanned_are_grey(browser):
         "ios/derived-data",
         "derived-data:Dead-abc",
     ]
-    assert _dim_lines(scr) == {3, 4, 7, 8}
+    assert _dim_lines(scr) == {0, 1, 4, 5}
     b.findings[0].size = 10
     b._collecting = frozenset({"archives"})  # an ios finder still running
     scr.attrs.clear()
     b.draw(b.rows())
-    assert _dim_lines(scr) == {3, 4}
-    assert scr.lines[4].endswith("2 findings …")
+    assert _dim_lines(scr) == {0, 1}
+    assert scr.lines[1] == "  ▾ ios  15B total · dead 10B …"
 
 
 def test_root_row_totals_everything_and_a_on_it_marks_all_dead(browser):
@@ -241,7 +242,7 @@ def test_root_row_totals_everything_and_a_on_it_marks_all_dead(browser):
     rows = b.rows()
     assert (rows[0].kind, rows[0].key) == ("root", "all")
     b.draw(rows)
-    assert scr.lines[3] == "> all  20B total · dead 13B · 4 findings"
+    assert scr.lines[0] == "> all  20B total · dead 13B".ljust(140) + "sort: verdict    ?"
     dead = {"derived-data:Dead-abc", "npm:old-npm"}
     b.handle_key(ord("a"), rows)
     assert b.marked == dead
@@ -266,9 +267,10 @@ def test_category_rows_show_dead_size_and_findings_show_last_date(browser):
     b, scr = browser
     b.draw(b.rows())
     txt = scr.text()
-    assert "ios  15B total · dead 10B · 2 findings" in txt
-    assert "derived-data  10B total · dead 10B · 1 findings" in txt
-    assert "sim-data  5B total · dead 0B · 1 findings" in txt
+    assert "findings" not in txt
+    assert scr.lines[1] == "  ▾ ios  15B total · dead 10B"
+    assert "  ▾ derived-data  10B total · dead 10B\n" in txt
+    assert "  ▾ sim-data  5B total · dead 0B\n" in txt
     day = (datetime.now(UTC) - timedelta(days=33)).date().isoformat()
     assert f"{day}   33d  Dead-abc" in txt
     assert "                  iPhone · iOS 27" in txt  # no date known → blank column
@@ -344,7 +346,7 @@ def test_scan_runs_in_background_and_keys_work_meanwhile(browser, monkeypatch):
     b.anchor = rows[b.cur].key
     release.set()
     b.wait(5)
-    assert not b.loading and b.status == "" and "2 findings" in b.msg
+    assert not b.loading and b.status == "" and b.msg == ""
     rows = b.rows()
     assert not rows[0].pending
     assert [r.key for r in rows] == [
@@ -401,51 +403,55 @@ def test_act_draws_live_status_per_position(browser, monkeypatch):
     assert [f.label for f in b.findings] == ["iPhone · iOS 27"]
 
 
-def test_key_hints_are_one_line_of_action_chips_at_the_bottom(browser):
-    """The last line holds the action keys as chips (bold+reverse) with dim descriptions, below
-    the message, the two detail lines and a dim rule. A narrow terminal drops chips from the
-    middle of the line, keeps `?` and `q`, and never wraps."""
+def test_bottom_lines_hold_message_and_detail_and_the_only_chip_is_help(browser):
+    """The last three lines hold the message, the finding's evidence and its action, with no
+    rule and no key line. They stay reserved on a heading: the tree never reaches them. The
+    only chip on the screen is `?`, at the right end of line 0."""
     b, scr = browser
-    b.cur = 5  # Dead-abc: both detail lines are drawn
+    b.cur = 5  # Dead-abc
     b.msg = "revealed /dd/Dead-abc"
     b.draw(b.rows())
-    bottom = scr.h - 1  # (line 0's marked chip shares key_attr without colours)
-    chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y > 0]
-    assert chips == [(bottom, f" {k} ") for k in tui.FOOTER]
-    assert b.key_attr & curses.A_REVERSE and b.key_attr & curses.A_BOLD
-    descs = [t for y, t, a in scr.attrs if y == bottom and a == curses.A_DIM]
-    assert descs == [
-        " mark",
-        " mark dead",
-        " act",
-        " sort",
-        " reveal",
-        " rescan",
-        " all keys",
-        " quit",
+    h = scr.h
+    assert [scr.lines[y] for y in (h - 3, h - 2, h - 1)] == [
+        "revealed /dd/Dead-abc",
+        "— orphan",
+        "  delete /dd/Dead-abc",
     ]
-    assert scr.lines[bottom - 1] == "revealed /dd/Dead-abc"
-    assert scr.lines[bottom - 2] == "  delete /dd/Dead-abc"
-    assert scr.lines[bottom - 3] == "— orphan"
-    assert scr.lines[bottom - 4] == "-" * (scr.w - 1)
-    assert scr.lines[4].startswith("  ▾ ios")  # tree below title, disk bar and sort line
-    for w, keys in (
-        (95, tui.FOOTER),
-        (94, ["space", "a", "d", "s", "r", "?", "q"]),
-        (80, ["space", "a", "d", "r", "?", "q"]),
-        (50, ["space", "d", "?", "q"]),
-        (24, ["?", "q"]),
-    ):
-        scr.attrs.clear()
+    assert not any("--" in ln for ln in scr.lines.values())
+    assert [(y, t) for y, t, a in scr.attrs if a == b.key_attr] == [(0, " ? ")]
+    assert scr.lines[0].endswith("    ?") and len(scr.lines[0]) == scr.w - 2
+    assert b.key_attr & curses.A_REVERSE and b.key_attr & curses.A_BOLD
+    scr.h, b.cur, b.msg = 8, 1, ""  # 6 rows; room for the header and 4 tree rows
+    b.draw(b.rows())
+    assert sorted(scr.lines) == [0, 1, 2, 3, 4]
+
+
+def test_all_row_stays_on_line_0_while_the_tree_scrolls(browser):
+    b, scr = browser
+    scr.h = 8  # header, 4 tree rows, 3 bottom lines
+    rows = b.rows()
+    b.cur = 5  # Dead-abc, the last row
+    b.draw(rows)
+    assert scr.lines[0].startswith("  all  15B total · dead 10B  ")
+    assert scr.lines[1] == "    ▾ sim-data  5B total · dead 0B"
+    assert scr.lines[4].startswith(">     [ ] dead") and scr.lines[4].endswith("Dead-abc")
+    b.cur = 0
+    b.draw(rows)
+    assert scr.lines[0].startswith("> all  ") and scr.lines[1] == "  ▾ ios  15B total · dead 10B"
+
+
+def test_narrow_header_drops_progress_then_sort_and_keeps_the_help_chip(browser):
+    b, scr = browser
+    b.status = "collecting 3/20 · sizing 5/40"
+    left = "> all  15B total · dead 10B"
+    full = "⟳ collecting 3/20 · sizing 5/40   sort: verdict    ?"
+    for w, tail in ((83, full), (82, "sort: verdict    ?"), (49, "sort: verdict    ?"), (48, " ?")):
         scr.w = w
         b.draw(b.rows())
-        chips = [(y, t) for y, t, a in scr.attrs if a == b.key_attr and y > 0]
-        assert chips == [(bottom, f" {k} ") for k in keys], w
-        assert len(scr.lines[bottom]) < w
-    scr.w = 160
-    scr.attrs.clear()
-    b.show_keys()
-    assert sum(1 for _y, _t, a in scr.attrs if a == b.key_attr) == len(tui.HELP) + 1
+        assert scr.lines[0] == left.ljust(w - 2 - len(tail)) + tail, w
+    scr.w = 20  # not even the chip fits beside the totals: they are cut short
+    b.draw(b.rows())
+    assert scr.lines[0] == "> all  15B tot   ?"
 
 
 def _dev(name, rt, size, verdict="review"):
@@ -490,7 +496,7 @@ def test_sim_devices_are_grouped_by_runtime(browser):
     ]
     b.draw(rows)
     txt = scr.text()
-    assert "▾ iOS 27.0  9B total · dead 5B · 2 findings" in txt
+    assert "▾ iOS 27.0  9B total · dead 5B\n" in txt
     assert "iPhone 17\n" in txt + "\n" and "iPhone 17 · iOS 27.0" not in txt  # suffix folded
     # space on the bucket marks everything in it; ← on a finding folds its bucket
     b.cur = 3
@@ -660,52 +666,55 @@ def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
     assert threading.active_count() == 1
 
 
-def test_marked_size_shows_in_tree_rows_and_header_chip(browser):
+def test_marked_size_shows_in_tree_rows_and_the_all_row(browser):
     b, scr = browser
     b.draw(b.rows())
-    assert "marked" not in scr.lines[4]  # nothing marked → rows stay as they were
+    assert "marked" not in scr.text()  # nothing marked → rows stay as they were
     b.marked = {"derived-data:Dead-abc"}
-    scr.attrs.clear()
     b.draw(b.rows())
     txt = scr.text()
-    assert "all  15B total · dead 10B · marked 10B · 2 findings" in txt
-    assert "ios  15B total · dead 10B · marked 10B · 2 findings" in txt
-    assert "derived-data  10B total · dead 10B · marked 10B · 1 findings" in txt
-    assert "sim-data  5B total · dead 0B · 1 findings" in txt
-    chip = next((t, a) for y, t, a in scr.attrs if y == 0 and "marked" in t)
-    assert chip[0] == " marked 1 · 10B " and chip[1] & curses.A_REVERSE
+    assert scr.lines[0].startswith("> all  15B total · dead 10B · marked 10B  ")
+    assert scr.lines[1] == "  ▾ ios  15B total · dead 10B · marked 10B"
+    assert "  ▾ derived-data  10B total · dead 10B · marked 10B\n" in txt
+    assert "  ▾ sim-data  5B total · dead 0B\n" in txt
 
 
 G = 1_000_000_000
 
 
-def test_header_is_title_and_marked_chip_only(browser):
-    """Line 0: title and the marked chip. No disk reading: line 1 stays empty, line 2 holds
-    the sort, and the tree still starts on line 3."""
+def test_all_row_is_the_header_with_sort_and_help_chip(browser):
+    """Line 0 is the `all` row: totals on the left, the sort and the `?` chip at the right
+    end. No title, no marked chip, no disk bar: the tree starts on line 1."""
     b, scr = browser
     b.draw(b.rows())
-    assert scr.lines[0] == "mobile-broom   marked 0 · 0B"
-    assert 1 not in scr.lines and scr.lines[2] == "sort: verdict"
-    assert scr.lines[3].startswith("> all  ")
+    assert scr.lines[0] == "> all  15B total · dead 10B".ljust(140) + "sort: verdict    ?"
+    assert scr.lines[1].startswith("  ▾ ios")
 
 
-def test_scan_progress_and_sort_sit_on_the_line_above_the_tree(colour_browser):
-    """Line 2, left: scan progress in the key colour, then the sort. The message line at the
-    bottom holds only the message."""
+def test_scan_progress_sits_left_of_the_sort_on_the_all_row(colour_browser):
+    """Scan progress in the key colour, then the sort, then the `?` chip. The row is drawn
+    before the first finding lands, dim while the scan runs."""
     b, scr = colour_browser
     b.findings = [_finding("npm", "general", "old-npm", size=3)]
+    b.disk = (400 * G, 1000 * G)
     b.status, b.msg = "collecting 3/20 · sizing 5/40", "revealed /dd/Dead-abc"
     b.draw(b.rows())
-    assert scr.lines[2] == "⟳ collecting 3/20 · sizing 5/40   sort: verdict"
-    assert [a for y, _t, a in scr.attrs if y == 2] == [
+    tail = "⟳ collecting 3/20 · sizing 5/40   sort: verdict    ?"
+    left = "> all  3B total · dead 3B · 400.0G free"
+    assert scr.lines[0] == left.ljust(scr.w - 2 - len(tail)) + tail
+    assert [a for y, _t, a in scr.attrs if y == 0] == [
+        curses.A_REVERSE | curses.A_BOLD,
         b.colors["key"] | curses.A_BOLD,
         curses.A_BOLD,
+        b.key_attr,
     ]
-    assert scr.lines[scr.h - 2] == "revealed /dd/Dead-abc"
-    assert scr.lines[3].startswith("> all  ")
-    b.status = ""
+    assert scr.lines[scr.h - 3] == "revealed /dd/Dead-abc"
+    b.findings, b.loading, b.status = [], True, "starting…"
+    scr.attrs.clear()
     b.draw(b.rows())
-    assert scr.lines[2] == "sort: verdict"
+    tail = "⟳ starting…   sort: verdict    ?"
+    assert scr.lines[0] == "  all  400.0G free …".ljust(scr.w - 2 - len(tail)) + tail
+    assert scr.attrs[0][2] == curses.A_DIM
 
 
 @pytest.fixture
@@ -720,85 +729,60 @@ def colour_browser(monkeypatch):
     return tui.Browser(scr, env=None, cfg=None, selectors=None), scr
 
 
-def test_marking_keys_match_the_marked_chip_and_d_is_red(colour_browser):
+def test_keys_box_lists_every_key_over_the_tree_and_any_key_closes_it(browser):
+    """`?` draws an ASCII box in the middle of the screen, over the tree: one key per line as
+    a chip, then what the marks mean. It waits for a key even while a scan ticks the loop."""
+    b, scr = browser
+    b.draw(b.rows())
+    scr.keys = [ord("x")]
+    b.handle_key(ord("?"), b.rows())
+    assert scr.keys == [] and scr.delay == -1
+    box = scr.frames[-1]
+    assert box[0].startswith("> all  ")  # the box leaves the header in view
+    top, bottom = [y for y, ln in box.items() if "+--" in ln]
+    x0 = box[top].index("+--")
+    width = len(box[top]) - x0
+    assert box[top][x0:].startswith("+-- keys --") and box[top].endswith("-+")
+    assert box[bottom][x0:].startswith("+-- any key closes --") and len(box[bottom]) == x0 + width
+    inside = [box[y][x0:] for y in range(top + 1, bottom)]
+    assert all(ln.startswith("|  ") and ln.endswith("  |") and len(ln) == width for ln in inside)
+    texts = [ln[3:-3].rstrip() for ln in inside]
+    assert texts[: len(tui.HELP)] == [
+        f" {k} ".ljust(max(len(k) for k, _d in tui.HELP) + 2) + f" {d}" for k, d in tui.HELP
+    ]
+    assert texts[len(tui.HELP) :] == ["", "marks", *tui.LEGEND]
+    assert x0 == (scr.w - 1 - width) // 2
+    b.findings, scr.delay = [], None  # before the first finding lands
+    b.handle_key(ord("?"), [])
+    assert scr.delay == -1 and "+-- keys --" in "\n".join(scr.frames[-1].values())
+
+
+def test_marking_keys_are_yellow_and_d_is_red(colour_browser):
     b, scr = colour_browser
     red = b.colors["dead"] | curses.A_BOLD | curses.A_REVERSE
     b.draw([])
-    chips = {t.strip(): a for y, t, a in scr.attrs if y == scr.h - 1 and a & curses.A_REVERSE}
-    assert list(chips) == tui.FOOTER
-    assert chips["space"] == chips["a"] == b.mark_attr
-    assert chips["d"] == red
-    assert {chips[k] for k in ("s", "o", "r", "?", "q")} == {b.key_attr}
-    assert len({b.mark_attr, red, b.key_attr}) == 3
+    assert [(t, a) for y, t, a in scr.attrs if a & curses.A_REVERSE] == [(" ? ", b.key_attr)]
     scr.attrs.clear()
-    b.show_keys()  # the `?` screen uses the same per-key colours
-    keys = {t.strip(): a for y, t, a in scr.attrs if y >= 2 and a & curses.A_REVERSE}
+    b.show_keys()
+    keys = {t.strip(): a for y, t, a in scr.attrs if a & curses.A_REVERSE}
+    assert list(keys) == [k for k, _d in tui.HELP]
     assert keys["space"] == keys["a"] == b.mark_attr and keys["d"] == red
-    assert {keys[k] for k in ("↑↓ jk", "n", "s", "q")} == {b.key_attr}
+    assert {keys[k] for k in ("↑↓ jk", "n", "s", "?", "q")} == {b.key_attr}
+    assert len({b.mark_attr, red, b.key_attr}) == 3
 
 
 def test_without_colour_every_chip_is_bold_reverse(browser):
     b, scr = browser
     b.draw([])
-    chips = {t.strip(): a for y, t, a in scr.attrs if y == scr.h - 1 and a & curses.A_REVERSE}
-    assert set(chips.values()) == {curses.A_BOLD | curses.A_REVERSE}
+    b.show_keys()
+    chips = {a for _y, _t, a in scr.attrs if a & curses.A_REVERSE}
+    assert chips == {curses.A_BOLD | curses.A_REVERSE}
 
 
-def test_disk_line_segments_and_percentage_without_marks():
-    line = tui._disk_line((400 * G, 1000 * G), 0, 120)
-    assert line == [
-        ("disk  ", "label"),
-        (" " * 24, "used"),
-        ("", "marked"),
-        ("." * 16, "free"),
-        ("  60% used · 400.0G free of 1.0T", "text"),
-    ]
-
-
-def test_disk_line_projects_free_space_after_marked_as_up_to():
-    """':' is the marked part of the used space; the text projects free + marked as "up to",
-    capped at the disk total. Nothing marked: no projection, no ':'."""
-
-    def line(marked):
-        parts = tui._disk_line((400 * G, 1000 * G), marked, 120)
-        return "".join(t for t, part in parts if part in ("used", "marked", "free")), parts[-1][0]
-
-    assert line(0) == (" " * 24 + "." * 16, "  60% used · 400.0G free of 1.0T")
-    assert line(100 * G) == (
-        " " * 20 + ":" * 4 + "." * 16,
-        "  60% used · 400.0G free of 1.0T → up to 500.0G after marked",
-    )
-    assert line(700 * G) == (  # more than is used: capped at the disk total
-        ":" * 24 + "." * 16,
-        "  60% used · 400.0G free of 1.0T → up to 1.0T after marked",
-    )
-    assert line(10)[0] == " " * 23 + ":" + "." * 16  # a tiny mark still shows
-
-
-def test_disk_line_degrades_bar_then_total_then_projection_then_bar():
-    def fit(w, marked=0):
-        text = "".join(t for t, _part in tui._disk_line((400 * G, 1000 * G), marked, w))
-        assert len(text) <= w - 1  # never wraps, never needs clipping
-        return text
-
-    assert fit(200) == "disk  " + " " * 24 + "." * 16 + "  60% used · 400.0G free of 1.0T"
-    assert fit(60) == "disk  " + " " * 13 + "." * 8 + "  60% used · 400.0G free of 1.0T"
-    assert fit(48) == "disk  " + " " * 10 + "." * 7 + "  60% used · 400.0G free"
-    assert fit(30) == "disk  60% used · 400.0G free"
-    m = 100 * G
-    assert fit(80, m).endswith("  60% used · 400.0G free of 1.0T → up to 500.0G after marked")
-    assert fit(80, m).count(":") == 2  # the bar shrank first
-    assert fit(70, m).endswith(".  60% used · 400.0G free → up to 500.0G after marked")
-    assert fit(60, m).endswith(".  60% used · 400.0G free → ≤500.0G")
-    assert fit(41, m) == "disk  60% used · 400.0G free → ≤500.0G"
-
-
-@pytest.mark.parametrize(("free", "level"), [(201, "ok"), (150, "stale"), (50, "dead")])
-def test_disk_bar_used_part_is_coloured_by_fill_level(browser, free, level):
-    b, scr = browser
-    b.colors = {"ok": 1 << 20, "stale": 2 << 20, "dead": 3 << 20}
-    b.draw_disk(1, (free * G, 1000 * G), 0)
-    assert [a for y, t, a in scr.attrs if t.strip() == ""] == [b.colors[level] | curses.A_REVERSE]
+def test_free_space_projects_the_marked_size_capped_at_the_used_space():
+    assert tui._free((400 * G, 1000 * G), 0) == "400.0G free"
+    assert tui._free((400 * G, 1000 * G), 100 * G) == "400.0G free → 500.0G"
+    assert tui._free((400 * G, 1000 * G), 700 * G) == "400.0G free → 1.0T"
 
 
 class DiskEnv:
@@ -839,12 +823,11 @@ def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, mon
     next(f for f in b.findings if f.label == "Dead-abc").size = 5 * G
     for _ in range(3):  # redraws reuse the reading
         b.draw(b.rows())
-    assert scr.lines[1].endswith("  61% used · 390.0G free of 1.0T → up to 395.0G after marked")
-    assert ":" in scr.lines[1]
+    assert " · marked 5.0G · 390.0G free → 395.0G  " in scr.lines[0]
     monkeypatch.setattr(actions, "remove", lambda p, trash=False: "deleted")
     b.act([f for f in b.findings if f.label == "Dead-abc"], trash=False)
     b.draw(b.rows())
-    assert scr.lines[1].endswith("  59% used · 410.5G free of 1.0T")
+    assert scr.lines[0].startswith("> all  5B total · dead 0B · 410.5G free  ")
     assert b.env.readings == []
 
 
@@ -879,6 +862,7 @@ def test_screen_never_draws_a_run_of_one_non_ascii_character(browser):
     for w in (160, 80):
         scr.w = w
         b.draw(b.rows())
+        b.draw_keys()
         for _y, text, _attr in scr.attrs:
             runs = re.findall(r"([^\x00-\x7f])\1", text)
             assert not runs, f"run of {runs[0]!r} in {text!r}"
@@ -895,7 +879,7 @@ def main(scr):
     b = tui.Browser(scr, env=None, cfg=None, selectors=None)
     b.disk = (183_800_000_000, 994_610_155_520)
     b.draw([])
-    b.draw_disk(1, b.disk, 50_000_000_000)
+    b.draw_keys()
     scr.refresh()
 
 curses.wrapper(main)
@@ -903,7 +887,7 @@ curses.wrapper(main)
 
 
 @pytest.mark.skipif(shutil.which("tic") is None, reason="needs tic to compile a terminfo entry")
-def test_bar_and_rule_reach_a_rep_terminal_as_valid_utf8(tmp_path):
+def test_screen_and_keys_box_reach_a_rep_terminal_as_valid_utf8(tmp_path):
     """The real curses, in a pty, with a terminfo entry that has `rep` (as Ghostty's
     xterm-ghostty does). The bytes must decode as UTF-8, and `rep` must follow only ASCII."""
     (tmp_path / "rep.ti").write_text(REP_TERMINFO)
@@ -933,5 +917,5 @@ def test_bar_and_rule_reach_a_rep_terminal_as_valid_utf8(tmp_path):
     reps = re.findall(rb"(.)\x1b\[\d+b", out, re.DOTALL)
     assert reps, "the terminfo entry's rep was not used; the test proves nothing"
     assert all(c[0] < 0x80 for c in reps), reps
-    assert b"-" in reps  # the footer rule arrived; the old one was dropped without a trace
-    out.decode("utf-8")  # raises on the old bar: b"\x88\x1b[32b" for a run of U+2588
+    assert b"-" in reps  # the box border arrived
+    out.decode("utf-8")  # raises on a run of U+2588, which arrives as b"\x88\x1b[32b"
