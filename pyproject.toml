@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mobile-broom"
-version = "0.1.24"
-description = "Semantic disk audit for iOS/Android dev machines — finds what is provably dead, not just big"
+version = "0.1.25"
+description = "A broom for iOS/Android dev machines: sweeps out what is provably dead to win back disk space"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

@@ -1,7 +1,7 @@
 # mobile-broom — agent notes
 
-Semantic disk audit for iOS/Android dev machines. `README.md` covers usage; this file covers
-how to work on the repo.
+A broom for iOS/Android dev machines: sweeps out what is provably dead to win back disk space.
+`README.md` covers usage; this file covers how to work on the repo.
 
 ## Releasing
 

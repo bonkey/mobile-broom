@@ -1,10 +1,10 @@
 # mobile-broom
 
-Semantic disk audit for iOS/Android dev machines. Answers *"what here is provably dead"*
-from metadata — `lastUsedAt`, dangling back-references, version strings nothing points at —
-not from size. Report by default; official CLIs (`simctl`, `avdmanager`, `sdkmanager`, `mise`)
-do the deleting where one exists; `--trash` moves paths to `~/.Trash` instead of deleting;
-never `sudo`.
+A broom for iOS/Android dev machines: sweeps out what is provably dead to win back disk space.
+*Dead* is decided from metadata — `lastUsedAt`, dangling back-references, version strings
+nothing points at — not from size. Report by default; official CLIs (`simctl`, `avdmanager`,
+`sdkmanager`, `mise`) do the deleting where one exists; `--trash` moves paths to `~/.Trash`
+instead of deleting; never `sudo`.
 
 ```
 $ mobile-broom ios

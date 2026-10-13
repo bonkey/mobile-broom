@@ -1,4 +1,5 @@
-"""mobile-broom — semantic disk audit for iOS/Android dev machines.
+"""mobile-broom — a broom for iOS/Android dev machines: sweeps out what is provably dead
+to win back disk space.
 
   mobile-broom                     interactive browser (tty) / full audit (pipe)
   mobile-broom audit [ios|android|worktrees|general|<category>...] [--json]
