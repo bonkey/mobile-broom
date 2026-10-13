@@ -3,6 +3,7 @@ import subprocess
 
 from conftest import days_ago, mkfile, simctl_devices_json
 
+from mobile_broom import cli
 from mobile_broom.finders import run as run_finders
 
 DT = "com.apple.CoreSimulator.SimDeviceType."
@@ -87,6 +88,51 @@ def test_worktree_artifacts_dedupe_case_insensitive_fs(env, cfg, home):
     fs = run_finders(["worktree-artifacts"], env, cfg)
     # on a case-insensitive FS `build`/`Build` are one dir → one finding, never two
     assert len(fs) == 1
+
+
+def test_paseo_artifacts_use_home_layout_and_git_ignore(env, cfg, home):
+    repo = make_repo(home)
+    wt = home / ".paseo" / "worktrees" / "ios-sdk" / "feature"
+    git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+    mkfile(wt / ".build" / "x", size=10)
+    mkfile(wt / "DerivedData" / "x", size=10)
+    mkfile(repo / ".build" / "x", size=10)
+
+    fs = {f.extra["artifact"]: f for f in run_finders(["paseo-artifacts"], env, cfg)}
+    assert set(fs) == {".build", "DerivedData"}
+    build = fs[".build"]
+    assert build.group == "paseo" and build.category == "paseo-artifacts"
+    assert build.action.path == str(wt / ".build") and build.verdict == "shared"
+    assert build.extra["worktree"] == str(wt) and "Paseo owns lifecycle" in build.evidence
+    assert fs["DerivedData"].action is None and "not git-ignored" in fs["DerivedData"].locked
+    assert all(f.action is None or f.action.path != str(wt) for f in fs.values())
+    other = run_finders(["worktree-artifacts"], env, cfg)
+    assert [f.action.path for f in other] == [str(repo / ".build")]
+
+
+def test_paseo_artifacts_skip_non_worktrees_and_symlinks(env, cfg, home):
+    root = home / ".paseo" / "worktrees"
+    mkfile(root / "unmanaged" / "copy" / ".build" / "x", size=10)
+    repo = make_repo(home)
+    wt = root / "ios-sdk" / "feature"
+    git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+    mkfile(wt / ".build" / "x", size=10)
+    (root / "linked-project").symlink_to(wt.parent, target_is_directory=True)
+    (wt.parent / "linked-worktree").symlink_to(wt, target_is_directory=True)
+    fs = run_finders(["paseo-artifacts"], env, cfg)
+    assert [f.action.path for f in fs] == [str(wt / ".build")]
+
+
+def test_paseo_group_clean_dry_run_preserves_worktree(env, home, capsys):
+    repo = make_repo(home)
+    wt = home / ".paseo" / "worktrees" / "ios-sdk" / "feature"
+    git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+    artifact = mkfile(wt / ".build" / "x", size=10)
+
+    assert cli.main(["clean", "paseo", "--dry-run", "--shared"], env=env) == 0
+    out = capsys.readouterr().out
+    assert "would" in out and str(wt / ".build") in out
+    assert artifact.exists() and wt.exists()
 
 
 def test_orphan_derived_data_cross_reference(env, cfg, home):

@@ -2,7 +2,7 @@
 to win back disk space.
 
   mobile-broom                     interactive browser (tty) / full audit (pipe)
-  mobile-broom audit [ios|android|worktrees|general|<category>...] [--json]
+  mobile-broom audit [ios|android|worktrees|paseo|general|<category>...] [--json]
   mobile-broom ios                 shorthand for `audit ios`
   mobile-broom clean ios           act on the dead findings in a group, with confirm
   mobile-broom clean derived-data --dry-run
