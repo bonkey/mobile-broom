@@ -404,6 +404,7 @@ def test_xctest_devices_scope_and_safety(env, cfg, home):
         "INVALID_DATE": ("Shutdown", True, "not-a-date"),
         "INVALID_DATE_TYPE": ("Shutdown", True, {"bad": "date"}),
         "OLD_NO_DATE": ("Shutdown", True, None),
+        "FRESH_CLONE": ("Shutdown", True, None),
         "ODD_STATE": ("Creating", True, 40),
         "WRONG_PATH": ("Shutdown", True, 40),
         "INVALID_PATH": ("Shutdown", True, None),
@@ -413,12 +414,14 @@ def test_xctest_devices_scope_and_safety(env, cfg, home):
     for udid, (state, available, age) in cases.items():
         path = root / udid
         mkfile(path / "data" / "file", size=10)
-        if udid == "OLD_NO_DATE":
+        if udid in ("OLD_NO_DATE", "FRESH_CLONE"):
             run_dir = path / "data/var/run"
             run_dir.mkdir(parents=True)
             os.utime(run_dir, (days_ago(40).timestamp(), days_ago(40).timestamp()))
         with (path / "device.plist").open("wb") as fh:
             plistlib.dump({"UDID": udid, "name": f"Clone {udid}"}, fh)
+        if udid == "OLD_NO_DATE":
+            os.utime(path / "device.plist", (days_ago(40).timestamp(), days_ago(40).timestamp()))
         if state:
             device = {
                 "udid": udid,
@@ -434,6 +437,7 @@ def test_xctest_devices_scope_and_safety(env, cfg, home):
             if age is not None:
                 device["lastBootedAt"] = days_ago(age).isoformat() if isinstance(age, int) else age
             devices.append(device)
+    env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
     env.respond(
         ["xcrun", "simctl", "--set", str(root), "list", "devices", "--json"],
         simctl_devices_json(
@@ -446,12 +450,13 @@ def test_xctest_devices_scope_and_safety(env, cfg, home):
     assert fs["STALE"].action.argv == ["xcrun", "simctl", "--set", str(root), "delete", "STALE"]
     assert fs["STALE"].paths == [str(root / "STALE")]
     assert fs["FRESH"].verdict == "review" and fs["FRESH"].action is None
-    assert fs["BOOTED"].locked and fs["BOOTED"].action is None
+    assert fs["BOOTED"].locked and fs["BOOTED"].action is None and fs["BOOTED"].unlock is None
     assert fs["UNAVAILABLE"].verdict == "dead" and fs["UNAVAILABLE"].action is not None
     assert fs["UNKNOWN"].locked and fs["UNKNOWN"].action is None
     assert fs["INVALID_DATE"].locked and fs["INVALID_DATE"].action is None
     assert fs["INVALID_DATE_TYPE"].locked and fs["INVALID_DATE_TYPE"].action is None
     assert fs["OLD_NO_DATE"].verdict == "stale"
+    assert fs["FRESH_CLONE"].verdict == "review" and fs["FRESH_CLONE"].action is None
     assert fs["ODD_STATE"].locked and fs["ODD_STATE"].action is None
     assert fs["WRONG_PATH"].locked and fs["WRONG_PATH"].action is None
     assert fs["INVALID_PATH"].locked and fs["INVALID_PATH"].action is None
@@ -467,11 +472,17 @@ def test_xctest_devices_scope_and_safety(env, cfg, home):
 def test_xctest_devices_simctl_failure_reports_locked_clones(env, cfg, home):
     root = home / "Library/Developer/XCTestDevices"
     mkfile(root / "ONE" / "device.plist", text="bad plist")
+    env.respond(
+        ["xcrun", "simctl", "list", "runtimes", "--json"],
+        returncode=1,
+        stderr="Connection invalid",
+    )
     fs = run_finders(["xctest-devices"], env, cfg)
     assert len(fs) == 1
     assert fs[0].paths == [str(root / "ONE")]
     assert fs[0].verdict == "review" and fs[0].action is None
-    assert "simctl" in fs[0].locked
+    assert env.simctl_error in fs[0].locked
+    assert not any("--set" in call for call in env.calls)
 
 
 def test_misc_ios_caches(env, cfg, home):

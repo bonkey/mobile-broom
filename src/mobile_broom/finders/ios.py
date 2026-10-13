@@ -316,7 +316,11 @@ def find_xctest_devices(env, cfg):
     names = listdir(root)
     if not names:
         return
-    data = env.run_json(["xcrun", "simctl", "--set", str(root), "list", "devices", "--json"])
+    data = (
+        env.run_json(["xcrun", "simctl", "--set", str(root), "list", "devices", "--json"])
+        if env.simctl_ok()
+        else None
+    )
     listed = data.get("devices") if isinstance(data, dict) else None
     devices = {
         d.get("udid"): d | {"runtime": rt}
@@ -347,12 +351,17 @@ def find_xctest_devices(env, cfg):
             last = as_utc(last)
         except (AttributeError, OverflowError, TypeError, ValueError):
             last = None
+        if last and source == "var/run mtime":
+            # A new clone inherits var/run's mtime but has its own freshly written plist.
+            made = mtime_of(path / "device.plist")
+            if made and made > last:
+                last, source = made, "device.plist mtime"
         state = d.get("state") if d else None
         action = None
         verdict = "review"
         locked = None
         if not isinstance(listed, dict):
-            locked = "simctl could not inspect the XCTest device set"
+            locked = env.simctl_error or "simctl could not inspect the XCTest device set"
         elif path.is_symlink() or info.get("UDID") != udid:
             locked = "device directory or plist identity cannot be verified"
         elif not d:
