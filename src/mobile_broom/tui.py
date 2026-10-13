@@ -18,6 +18,7 @@ from .render import last_col
 from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
+QUIT_WAIT = 0.3  # seconds q or ^C gives a running scan to wind down before leaving it behind
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # one frame per tick on everything still being collected or sized
 # `s` cycles these; each orders the findings inside a category / runtime heading
 SORTS = [
@@ -178,6 +179,7 @@ class Browser:
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
         self._lock = threading.Lock()  # guards findings/marked/status/progress/collecting
         self._thread: threading.Thread | None = None
+        self._sizer: Sizer | None = None  # the scan's, so stop() can save what it sized
         self._stop = threading.Event()  # set on quit: workers bail out, walks abandon
         self._errors: list[str] = []
         self._prog = [0, 0, 0, 0]  # cats done, cats total, sized, to size
@@ -248,12 +250,16 @@ class Browser:
         if self.env is not None:
             self.disk = self.env.disk_usage()
 
-    def stop(self, timeout: float = 10.0):
+    def stop(self, timeout: float = 10.0) -> bool:
         """Abandon a running scan: queued tasks are dropped, walks in flight bail at their next
-        directory, and the scan thread is joined so the interpreter has nothing left to wait
-        for after curses hands the terminal back."""
+        directory, and the sizes found so far are saved. Waits up to `timeout` for the scan
+        thread. Returns False when it is still running: a finder is inside a subprocess (git,
+        simctl) or the walk of the scan roots, and neither checks the stop flag."""
         self._stop.set()
         self.wait(timeout)
+        if self._sizer is not None:
+            self._sizer.save()
+        return self._thread is None or not self._thread.is_alive()
 
     def _collect_worker(self, refresh: bool):
         try:
@@ -269,7 +275,7 @@ class Browser:
 
     def _collect(self, refresh: bool):
         cats = finders.resolve(self.selectors)
-        sizer = Sizer(refresh=refresh, stop=self._stop.is_set)
+        sizer = self._sizer = Sizer(refresh=refresh, stop=self._stop.is_set)
         with self._lock:
             self._prog[1] = len(cats)
             self._collecting = frozenset(cats)
@@ -284,9 +290,9 @@ class Browser:
                 fut.result()
         finally:
             ex.shutdown(wait=True, cancel_futures=self._stop.is_set())
-        sizer.save()  # whatever was sized before a stop is still a valid cache entry
         if self._stop.is_set():
-            return
+            return  # stop() saves the sizes
+        sizer.save()
         self.read_disk()
         with self._lock:
             self.marked &= {f.key for f in self.findings}
@@ -833,16 +839,26 @@ class Browser:
 def run(selectors, env, cfg, refresh=False) -> int:
     import sys
 
+    stopped = True  # False: the scan thread outlived the quit
+
     def main(scr):
+        nonlocal stopped
         b = Browser(scr, env, cfg, selectors, refresh=refresh)
         try:
             b.loop()
         finally:
-            b.stop()  # q or ^C mid-scan: drop queued work and join before curses returns
+            stopped = b.stop(QUIT_WAIT)  # q or ^C mid-scan: drop queued work before curses returns
 
+    code = 0
     try:
         curses.wrapper(main)
     except curses.error:
         print("mobile-broom: TUI needs an interactive terminal", file=sys.stderr)
-        return 2
-    return 0
+        code = 2
+    except KeyboardInterrupt:
+        code = 130
+    if not stopped:
+        # interpreter exit joins the pool's threads, so it would wait out the stuck finder;
+        # the terminal is back and the sizes are saved, so leave without it
+        os._exit(code)
+    return code
