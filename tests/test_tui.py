@@ -706,11 +706,17 @@ def test_scan_progress_sits_left_of_the_sort_on_the_all_row(colour_browser):
     tail = "⟳ collecting 3/20 · sizing 5/40   sort: verdict    ?"
     left = "> all  3B total · dead 3B · 400.0G free"
     assert scr.lines[0] == left.ljust(scr.w - 2 - len(tail)) + tail
-    assert [a for y, _t, a in scr.attrs if y == 0] == [
-        curses.A_REVERSE | curses.A_BOLD,
-        b.colors["key"] | curses.A_BOLD,
-        curses.A_BOLD,
-        b.key_attr,
+    sel = curses.A_REVERSE | curses.A_BOLD
+    assert [(t, a) for y, t, a in scr.attrs if y == 0] == [
+        ("> all", sel),
+        ("  ", sel),
+        ("3B total · ", sel),
+        ("dead 3B", sel | b.colors["dead"]),
+        (" · ", sel),
+        ("400.0G free", sel),
+        ("⟳ collecting 3/20 · sizing 5/40", b.colors["key"] | curses.A_BOLD),
+        ("sort: verdict", curses.A_BOLD),
+        (" ? ", b.key_attr),
     ]
     assert scr.lines[scr.h - 3] == "revealed /dd/Dead-abc"
     b.findings, b.loading, b.status = [], True, "starting…"
@@ -731,6 +737,47 @@ def colour_browser(monkeypatch):
     monkeypatch.setattr(curses, "curs_set", lambda _v: None)
     scr = FakeScreen()
     return tui.Browser(scr, env=None, cfg=None, selectors=None), scr
+
+
+def test_dead_size_is_red_and_marked_size_yellow_in_heading_totals(colour_browser):
+    """A dead size above zero takes the dead colour, the marked size the marking colour. The
+    rest of a heading keeps the row's look, and `dead 0B` stays plain."""
+    b, scr = colour_browser
+    brew = Finding(
+        "homebrew",
+        "general",
+        "brew",
+        ["/b"],
+        "e",
+        "review",
+        size=5,
+        action=Action("remove", path="/b"),
+    )
+    b.findings = sorted([_finding("npm", "general", "old-npm", size=3), brew], key=tui.sort_key)
+    b.marked = {"npm:old-npm"}
+    b.cur = 1  # the group row: selected, bold
+    b.draw(b.rows())
+    red, yellow = b.colors["dead"], b.colors["stale"]
+    sel = curses.A_REVERSE | curses.A_BOLD
+
+    def line(y):
+        return [(t, a) for yy, t, a in scr.attrs if yy == y]
+
+    assert line(1) == [
+        ("> ▾ general  ", sel),
+        ("8B total · ", sel),
+        ("dead 3B", sel | red),
+        (" · ", sel),
+        ("marked 3B", sel | yellow),
+    ]
+    assert [r.key for r in b.rows()][2:] == ["general/npm", "general/homebrew"]
+    assert line(2)[1:] == [
+        ("3B total · ", 0),
+        ("dead 3B", red),
+        (" · ", 0),
+        ("marked 3B", yellow),
+    ]
+    assert line(3)[1:] == [("5B total · ", 0), ("dead 0B", 0)]
 
 
 def test_keys_box_lists_every_key_over_the_tree_and_any_key_closes_it(browser):

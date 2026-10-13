@@ -74,12 +74,22 @@ def _size(n: int | None) -> str:
     return "   …  " if n is None else human(n)
 
 
-def _totals(fs: list[Finding], marked: set[str]) -> str:
+def _totals(fs: list[Finding], marked: set[str]) -> list[tuple[str, str]]:
+    """'122.4G total · dead 12.2G · marked 35.9G' as (text, part) pieces: a dead size above
+    zero is part `dead`, the marked size part `marked`."""
     total = sum(f.size or 0 for f in fs)
     dead = sum(f.size or 0 for f in fs if f.verdict == "dead")
+    pieces = [
+        (f"{human(total).strip()} total · ", ""),
+        (f"dead {human(dead).strip()}", "dead" if dead else ""),
+    ]
     picked = [f for f in fs if f.key in marked]
-    mark = f" · marked {human(sum(f.size or 0 for f in picked)).strip()}" if picked else ""
-    return f"{human(total).strip()} total · dead {human(dead).strip()}{mark}"
+    if picked:
+        pieces += [
+            (" · ", ""),
+            (f"marked {human(sum(f.size or 0 for f in picked)).strip()}", "marked"),
+        ]
+    return pieces
 
 
 def _free(usage: tuple[int, int], marked: int) -> str:
@@ -143,9 +153,10 @@ def reveal(path: str) -> str | None:
 
 
 class Row:
-    def __init__(self, kind, key, label, finding=None, depth=0, pending=False):
+    def __init__(self, kind, key, label, finding=None, depth=0, pending=False, totals=()):
         self.kind, self.key, self.label, self.finding, self.depth = kind, key, label, finding, depth
         self.pending = pending
+        self.totals = list(totals)  # a heading's _totals pieces, drawn after its label
 
 
 class Browser:
@@ -197,6 +208,11 @@ class Browser:
             "space": self.mark_attr,
             "a": self.mark_attr,
             "d": self.colors.get("dead", 0) | curses.A_BOLD | curses.A_REVERSE,
+        }
+        # the dead and marked sizes in heading totals take the same colours
+        self.part_attrs = {
+            "dead": self.colors.get("dead", 0),
+            "marked": self.colors.get("stale", 0),
         }
 
     # -- collecting ------------------------------------------------------
@@ -343,7 +359,8 @@ class Browser:
                 Row(
                     "group",
                     g,
-                    f"{g}  {_totals(gf, self.marked)}",
+                    g,
+                    totals=_totals(gf, self.marked),
                     pending=bool(collecting & set(GROUPS[g])) or any(f.size is None for f in gf),
                 )
             )
@@ -358,7 +375,8 @@ class Browser:
                     Row(
                         "cat",
                         key,
-                        f"{cat}  {_totals(cf, self.marked)}",
+                        cat,
+                        totals=_totals(cf, self.marked),
                         depth=1,
                         pending=any(f.size is None for f in cf),
                     )
@@ -380,7 +398,8 @@ class Browser:
                         Row(
                             "bucket",
                             bkey,
-                            f"{b}  {_totals(bf, self.marked)}",
+                            b,
+                            totals=_totals(bf, self.marked),
                             depth=2,
                             pending=any(f.size is None for f in bf),
                         )
@@ -467,11 +486,10 @@ class Browser:
                 )
             else:
                 arrow = "▾ " if self.is_open(row) else "▸ "
-                text = f"{'>' if idx == self.cur else ' '} {indent}{arrow}{row.label}"
-                if row.pending:
-                    text += " …"
+                head = f"{'>' if idx == self.cur else ' '} {indent}{arrow}{row.label}  "
+                pieces = [(head, ""), *row.totals] + ([(" …", "")] if row.pending else [])
                 bold = curses.A_BOLD if row.kind == "group" else 0
-                _put(scr, y, 0, text, sel | (dim or bold))
+                self.draw_pieces(y, 0, pieces, sel | (dim or bold))
         if self.msg:
             _put(scr, h - 3, 0, self.msg)
         if rows and rows[self.cur].kind == "finding":
@@ -491,19 +509,19 @@ class Browser:
         scr = self.scr
         _h, w = scr.getmaxyx()
         findings, disk = self.findings, self.disk  # snapshots: the scan thread replaces them
-        parts = [_totals(findings, self.marked)] if findings else []
+        body = _totals(findings, self.marked) if findings else []
         if disk:
             marked = sum(f.size or 0 for f in findings if f.key in self.marked)
-            parts.append(_free(disk, marked))
+            body += [(" · ", "")] if body else []
+            body.append((_free(disk, marked), ""))
         sel = root is not None and self.cur == 0
-        left = f"{'>' if sel else ' '} all  {' · '.join(parts)}".rstrip()
         pending = root.pending if root else self.loading
-        if pending:
-            left += " …"
-        right = _controls(self.status, SORTS[self.sort][0], w - 3 - len(left))
+        left = [(f"{'>' if sel else ' '} all", "")] + ([("  ", ""), *body] if body else [])
+        left += [(" …", "")] if pending else []
+        right = _controls(self.status, SORTS[self.sort][0], w - 3 - sum(len(t) for t, _p in left))
         x = w - 1 - sum(len(t) + 3 for t, _p in right) + 3
         attr = (curses.A_REVERSE if sel else 0) | (curses.A_DIM if pending else curses.A_BOLD)
-        _put(scr, 0, 0, left[: max(0, x - 2)], attr)
+        self.draw_pieces(0, 0, left, attr, end=x - 2)
         attrs = {
             "status": self.colors.get("key", 0) | curses.A_BOLD,
             "sort": curses.A_BOLD,
@@ -512,6 +530,16 @@ class Browser:
         for text, part in right:
             _put(scr, 0, x, text, attrs[part])
             x += len(text) + 3
+
+    def draw_pieces(self, y: int, x: int, pieces: list[tuple[str, str]], attr: int, end=None):
+        """Draw (text, part) pieces left to right over `attr`, colouring the `dead` and
+        `marked` parts. Nothing is drawn from column `end` on."""
+        for text, part in pieces:
+            if end is not None:
+                text = text[: max(0, end - x)]
+            if text:
+                _put(self.scr, y, x, text, attr | self.part_attrs.get(part, 0))
+            x += len(text)
 
     # -- actions ---------------------------------------------------------
     def confirm_and_act(self):

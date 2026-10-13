@@ -70,7 +70,8 @@ are candidates, and `t` (move to `~/.Trash`) frees nothing until the Trash is em
 is read at startup, when a scan finishes and after `d`. At its right end are the scan progress
 (`⟳ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
 every key (marking keys in yellow, `d` in red) and what the marks mean. Every group and category
-row shows `total · dead`, plus `marked` once something under it is marked; space or `a` on `all`
+row shows `total · dead`, plus `marked` once something under it is marked (a dead size above
+zero in red, the marked size in yellow); space or `a` on `all`
 covers every finding. The last three lines hold the last message, then the selected finding's
 evidence and its action. Every finding shows the date its verdict is based on
 (last use or modification) and its age in days. Simulator categories (`sim-devices`,
