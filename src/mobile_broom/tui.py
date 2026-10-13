@@ -31,7 +31,7 @@ HELP = [
     ("↑↓ jk", "move"),
     ("→ ⏎", "expand"),
     ("← h", "collapse"),
-    ("f", "fold/unfold all"),
+    ("f", "fold/unfold branch"),
     ("space", "mark"),
     ("a", "mark dead"),
     ("n", "unmark"),
@@ -445,13 +445,19 @@ class Browser:
         return f"{key}/{f.bucket}" if f.bucket else key
 
     def fold_all(self, rows: list[Row], row: Row):
-        """`f`: while any finding is hidden, open every branch; once all show, close the row
-        each finding hangs from (its bucket, or its category). The cursor stays on its row, or
-        moves to the parent of the finding it was on."""
-        fs = self.findings
-        if sum(r.kind == "finding" for r in rows) < len(fs):
+        """`f` on a heading: while any finding under it is hidden, open everything under it;
+        once they all show, close the row each of them hangs from (its bucket, or its
+        category). On a finding it acts on the finding's own branch. Other branches keep their
+        state. The cursor stays on its row, or moves to the parent of the finding it was on."""
+        if row.kind == "finding":
+            parent = self.parent_key(row.finding)
+            fs = [f for f in self.findings if self.parent_key(f) == parent]
+        else:
+            fs = self._under(row)
+        keys = {f.key for f in fs}
+        if sum(r.kind == "finding" and r.key in keys for r in rows) < len(fs):
             self.open |= {f.group for f in fs} | {f"{f.group}/{f.category}" for f in fs}
-            self.closed.clear()
+            self.closed -= {self.parent_key(f) for f in fs if f.bucket}
             self.anchor = row.key
             return
         self.closed |= {self.parent_key(f) for f in fs if f.bucket}
@@ -788,18 +794,20 @@ class Browser:
             self.show_keys()
         return True
 
-    def _toggle_all(self, row, pred):
+    def _under(self, row) -> list[Finding]:
+        """The findings under a heading row; every finding for `all` or None."""
         if row is None or row.kind == "root":
-            pool = self.findings
-        elif row.kind == "group":
-            pool = [f for f in self.findings if f.group == row.key]
-        elif row.kind == "bucket":
+            return self.findings
+        if row.kind == "group":
+            return [f for f in self.findings if f.group == row.key]
+        if row.kind == "bucket":
             g, c, b = row.key.split("/", 2)
-            pool = [f for f in self.findings if (f.group, f.category, f.bucket) == (g, c, b)]
-        else:
-            g, c = row.key.split("/", 1)
-            pool = [f for f in self.findings if f.group == g and f.category == c]
-        keys = {f.key for f in pool if pred(f)}
+            return [f for f in self.findings if (f.group, f.category, f.bucket) == (g, c, b)]
+        g, c = row.key.split("/", 1)
+        return [f for f in self.findings if f.group == g and f.category == c]
+
+    def _toggle_all(self, row, pred):
+        keys = {f.key for f in self._under(row) if pred(f)}
         if keys and keys <= self.marked:
             self.marked -= keys
         else:

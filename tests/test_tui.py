@@ -560,10 +560,11 @@ def test_s_cycles_sort_within_a_branch(browser):
     assert labels() == ["mid-dead", "big-new", "small-old"]
 
 
-def test_f_unfolds_every_branch_then_folds_every_finding_away(browser):
-    """`f` opens every group, category and bucket so each finding shows. Once they all show,
-    `f` closes the row each finding hangs from, so categories and runtime buckets stay listed.
-    The cursor keeps its row, or moves to the parent of the finding it was on."""
+def test_f_folds_and_unfolds_only_the_branch_under_the_cursor(browser):
+    """`f` on a heading opens everything under it while any finding there is hidden. Once they
+    all show, it closes the row each of them hangs from, so categories and runtime buckets stay
+    listed. Siblings keep their state. On `all` it covers the whole tree; on a finding, the
+    finding's own branch. The cursor keeps its row, or moves to the finding's parent."""
     b, _scr = browser
     b.findings = sorted(
         [
@@ -577,16 +578,22 @@ def test_f_unfolds_every_branch_then_folds_every_finding_away(browser):
     b.open = {"ios"}  # general and every category folded
     b.closed = {"ios/sim-devices/iOS 26.0"}
 
-    def shown():
-        return sum(r.kind == "finding" for r in b.rows())
+    def f_on(key):
+        rows = b.rows()
+        b.cur = next(i for i, r in enumerate(rows) if r.key == key)
+        b.handle_key(ord("f"), rows)
 
-    rows = b.rows()
-    b.cur = 1  # the ios group
-    b.handle_key(ord("f"), rows)
-    assert shown() == len(b.findings) == 5 and b.anchor == "ios"
-    rows = b.rows()
-    b.cur = next(i for i, r in enumerate(rows) if r.key == "sim-devices:iPad · iOS 26.0")
-    b.handle_key(ord("f"), rows)
+    def shown():
+        return [r.key for r in b.rows() if r.kind == "finding"]
+
+    f_on("all")
+    assert len(shown()) == len(b.findings) == 5 and b.anchor == "all"
+    f_on("ios/derived-data")  # its siblings keep their findings
+    assert len(shown()) == 4 and "derived-data:Dead-abc" not in shown()
+    assert b.anchor == "ios/derived-data"
+    f_on("ios")  # derived-data is hidden, so the group unfolds
+    assert len(shown()) == 5 and b.anchor == "ios"
+    f_on("ios")  # all of ios shows: its findings fold away, general keeps npm open
     assert [(r.kind, r.key) for r in b.rows()] == [
         ("root", "all"),
         ("group", "ios"),
@@ -597,12 +604,12 @@ def test_f_unfolds_every_branch_then_folds_every_finding_away(browser):
         ("cat", "ios/derived-data"),
         ("group", "general"),
         ("cat", "general/npm"),
+        ("finding", "npm:old-npm"),
     ]
-    assert b.anchor == "ios/sim-devices/iOS 26.0"
-    b.cur = 5  # one category opened by hand: some findings still hidden, so `f` unfolds
-    b.handle_key(curses.KEY_RIGHT, b.rows())
-    b.handle_key(ord("f"), b.rows())
-    assert shown() == 5 and b.anchor == "ios/sim-data"
+    f_on("npm:old-npm")  # a finding: its own branch, and the cursor moves to it
+    assert shown() == [] and b.anchor == "general/npm"
+    f_on("all")
+    assert len(shown()) == 5
 
 
 def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
