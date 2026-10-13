@@ -560,6 +560,51 @@ def test_s_cycles_sort_within_a_branch(browser):
     assert labels() == ["mid-dead", "big-new", "small-old"]
 
 
+def test_f_unfolds_every_branch_then_folds_every_finding_away(browser):
+    """`f` opens every group, category and bucket so each finding shows. Once they all show,
+    `f` closes the row each finding hangs from, so categories and runtime buckets stay listed.
+    The cursor keeps its row, or moves to the parent of the finding it was on."""
+    b, _scr = browser
+    b.findings = sorted(
+        [
+            *b.findings,
+            _dev("iPhone 17", "iOS 27.0", 5),
+            _dev("iPad", "iOS 26.0", 4),
+            _finding("npm", "general", "old-npm", size=3),
+        ],
+        key=tui.sort_key,
+    )
+    b.open = {"ios"}  # general and every category folded
+    b.closed = {"ios/sim-devices/iOS 26.0"}
+
+    def shown():
+        return sum(r.kind == "finding" for r in b.rows())
+
+    rows = b.rows()
+    b.cur = 1  # the ios group
+    b.handle_key(ord("f"), rows)
+    assert shown() == len(b.findings) == 5 and b.anchor == "ios"
+    rows = b.rows()
+    b.cur = next(i for i, r in enumerate(rows) if r.key == "sim-devices:iPad · iOS 26.0")
+    b.handle_key(ord("f"), rows)
+    assert [(r.kind, r.key) for r in b.rows()] == [
+        ("root", "all"),
+        ("group", "ios"),
+        ("cat", "ios/sim-devices"),
+        ("bucket", "ios/sim-devices/iOS 27.0"),
+        ("bucket", "ios/sim-devices/iOS 26.0"),
+        ("cat", "ios/sim-data"),
+        ("cat", "ios/derived-data"),
+        ("group", "general"),
+        ("cat", "general/npm"),
+    ]
+    assert b.anchor == "ios/sim-devices/iOS 26.0"
+    b.cur = 5  # one category opened by hand: some findings still hidden, so `f` unfolds
+    b.handle_key(curses.KEY_RIGHT, b.rows())
+    b.handle_key(ord("f"), b.rows())
+    assert shown() == 5 and b.anchor == "ios/sim-data"
+
+
 def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
     """Finder B never returns on its own: it polls the stop flag. `q` → stop() sets it, drops the
     queued sizing tasks, and joins the scan thread before the loop returns."""

@@ -31,6 +31,7 @@ HELP = [
     ("↑↓ jk", "move"),
     ("→ ⏎", "expand"),
     ("← h", "collapse"),
+    ("f", "fold/unfold all"),
     ("space", "mark"),
     ("a", "mark dead"),
     ("n", "unmark"),
@@ -443,6 +444,20 @@ class Browser:
         key = f"{f.group}/{f.category}"
         return f"{key}/{f.bucket}" if f.bucket else key
 
+    def fold_all(self, rows: list[Row], row: Row):
+        """`f`: while any finding is hidden, open every branch; once all show, close the row
+        each finding hangs from (its bucket, or its category). The cursor stays on its row, or
+        moves to the parent of the finding it was on."""
+        fs = self.findings
+        if sum(r.kind == "finding" for r in rows) < len(fs):
+            self.open |= {f.group for f in fs} | {f"{f.group}/{f.category}" for f in fs}
+            self.closed.clear()
+            self.anchor = row.key
+            return
+        self.closed |= {self.parent_key(f) for f in fs if f.bucket}
+        self.open -= {self.parent_key(f) for f in fs if not f.bucket}
+        self.anchor = self.parent_key(row.finding) if row.kind == "finding" else row.key
+
     def draw(self, rows):
         scr = self.scr
         scr.erase()
@@ -731,6 +746,8 @@ class Browser:
                 self.close(rows[self.cur])
             elif row.kind != "root":
                 self.close(row)
+        elif k == ord("f"):
+            self.fold_all(rows, row)
         elif k == ord(" "):
             if row.kind == "finding":
                 f = row.finding
