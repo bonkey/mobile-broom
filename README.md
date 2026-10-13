@@ -60,15 +60,15 @@ TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · `e` on a 
 the heading (on the top `all` row: everywhere) · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `s` cycle sort (verdict → size ↓ → date ↑, within each branch) · `o` reveal the finding's path in Finder · `r` rescan · `?` keys · `q`.
 
 The scan runs in the background, one worker per category: branches appear as their finder
-returns, and rows still being collected or sized are grey with a `…` until their sizes land
-(same on `r`). You can move,
+returns, and rows still being collected or sized are grey with a spinner (`⠋`) until their
+sizes land (same on `r`). You can move,
 expand and mark while it runs; `d` waits for the scan to finish. The top line is the `all`
 row, which stays in place while the tree scrolls. It shows `total · dead · marked` for every
 finding and the free space on the disk that holds your home folder (`444.0G free`). While
 anything is marked it adds `→ <free + marked>`. That is a ceiling, not a promise: marked sizes
 are candidates, and `t` (move to `~/.Trash`) frees nothing until the Trash is emptied. The disk
 is read at startup, when a scan finishes and after `d`. At its right end are the scan progress
-(`⟳ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
+(`⠋ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
 every key (marking keys in yellow, `d` in red) and what the marks mean. Every group and category
 row shows `total · dead`, plus `marked` once something under it is marked (a dead size above
 zero in red, the marked size in yellow); space or `a` on `all`

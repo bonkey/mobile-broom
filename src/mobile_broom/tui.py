@@ -18,6 +18,7 @@ from .render import last_col
 from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # one frame per tick on everything still being collected or sized
 # `s` cycles these; each orders the findings inside a category / runtime heading
 SORTS = [
     ("verdict", lambda f: (VERDICT_RANK[f.verdict], -(f.size or 0), f.label)),
@@ -46,7 +47,7 @@ LEGEND = [
     "[x] marked",
     "[-] locked — not removable; the lines at the bottom say why",
     "    (space offers to shut a booted sim down)",
-    "…   grey: still being collected or sized (scan in progress)",
+    "⠋   grey, spinning: still being collected or sized (scan in progress)",
     "all top row — space and a on it cover every finding",
     "    free → N: the free space once the marked findings are gone is at most N",
     "date column: last use/modification the verdict is based on, and its age in days",
@@ -70,8 +71,8 @@ def _put(scr, y, x, text, attr=0):
             pass
 
 
-def _size(n: int | None) -> str:
-    return "   …  " if n is None else human(n)
+def _size(n: int | None, spin: str) -> str:
+    return f"   {spin}  " if n is None else human(n)
 
 
 def _totals(fs: list[Finding], marked: set[str]) -> list[tuple[str, str]]:
@@ -103,11 +104,11 @@ def _free(usage: tuple[int, int], marked: int) -> str:
     return text
 
 
-def _controls(status: str, sort: str, room: int) -> list[tuple[str, str]]:
+def _controls(status: str, spin: str, sort: str, room: int) -> list[tuple[str, str]]:
     """The right end of the `all` row as (text, part) pieces drawn three spaces apart: scan
-    progress, sort, `?` chip. When they need more than `room` columns, the progress goes
-    first, then the sort. The `?` chip always stays."""
-    pieces = [(f"⟳ {status}", "status")] if status else []
+    progress behind the spinner frame `spin`, sort, `?` chip. When they need more than `room`
+    columns, the progress goes first, then the sort. The `?` chip always stays."""
+    pieces = [(f"{spin} {status}", "status")] if status else []
     pieces += [(f"sort: {sort}", "sort"), (" ? ", "help")]
     while len(pieces) > 1 and sum(len(t) + 3 for t, _p in pieces) - 3 > room:
         pieces.pop(0)
@@ -173,6 +174,7 @@ class Browser:
         self.status = ""  # collecting/sizing progress shown above the tree
         self.disk: tuple[int, int] | None = None  # (free, total) of HOME's volume, for the bar
         self.loading = False  # a background scan is filling self.findings
+        self.spin = 0  # SPIN frame; the loop steps it on every tick of a scan
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
         self._lock = threading.Lock()  # guards findings/marked/status/progress/collecting
         self._thread: threading.Thread | None = None
@@ -228,7 +230,7 @@ class Browser:
             self._errors = []
             self._prog = [0, 0, 0, 0]
             self.loading = True
-            self.status = "starting…"
+            self.status = "starting"
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._collect_worker, args=(refresh,), daemon=True, name="mobile-broom-scan"
@@ -456,7 +458,8 @@ class Browser:
         scr = self.scr
         scr.erase()
         h, _w = scr.getmaxyx()
-        self.draw_header(rows[0] if rows else None)
+        spin = SPIN[self.spin % len(SPIN)]
+        self.draw_header(rows[0] if rows else None, spin)
         # fixed heights: the `all` row on top; message, evidence and action-or-lock at the bottom
         top = 1
         body = max(1, h - top - 3)
@@ -481,13 +484,13 @@ class Browser:
                     scr,
                     y,
                     x + 7,
-                    f"{_size(f.size)}  {last_col(f.last)}  {f.display_label}",
+                    f"{_size(f.size, spin)}  {last_col(f.last)}  {f.display_label}",
                     sel | dim,
                 )
             else:
                 arrow = "▾ " if self.is_open(row) else "▸ "
                 head = f"{'>' if idx == self.cur else ' '} {indent}{arrow}{row.label}  "
-                pieces = [(head, ""), *row.totals] + ([(" …", "")] if row.pending else [])
+                pieces = [(head, ""), *row.totals] + ([(f" {spin}", "")] if row.pending else [])
                 bold = curses.A_BOLD if row.kind == "group" else 0
                 self.draw_pieces(y, 0, pieces, sel | (dim or bold))
         if self.msg:
@@ -501,7 +504,7 @@ class Browser:
                 _put(scr, h - 1, 0, f"  locked: {f.locked}", self.colors.get("stale", 0))
         scr.refresh()
 
-    def draw_header(self, root: Row | None):
+    def draw_header(self, root: Row | None, spin: str):
         """Line 0 is the `all` row, pinned while the tree scrolls: totals and free space on the
         left; scan progress, sort and the `?` chip at the right end. It is drawn before the
         first finding lands too. When even the chip alone does not fit beside the totals, the
@@ -517,8 +520,9 @@ class Browser:
         sel = root is not None and self.cur == 0
         pending = root.pending if root else self.loading
         left = [(f"{'>' if sel else ' '} all", "")] + ([("  ", ""), *body] if body else [])
-        left += [(" …", "")] if pending else []
-        right = _controls(self.status, SORTS[self.sort][0], w - 3 - sum(len(t) for t, _p in left))
+        left += [(f" {spin}", "")] if pending else []
+        room = w - 3 - sum(len(t) for t, _p in left)
+        right = _controls(self.status, spin, SORTS[self.sort][0], room)
         x = w - 1 - sum(len(t) + 3 for t, _p in right) + 3
         attr = (curses.A_REVERSE if sel else 0) | (curses.A_DIM if pending else curses.A_BOLD)
         self.draw_pieces(0, 0, left, attr, end=x - 2)
@@ -731,6 +735,7 @@ class Browser:
             self.scr.timeout(TICK_MS if self.loading else -1)
             k = self.scr.getch()
             if k == -1:  # tick: nothing pressed, redraw with whatever the scan produced
+                self.spin += 1
                 self.anchor = rows[self.cur].key if rows else None
                 continue
             self.anchor = None

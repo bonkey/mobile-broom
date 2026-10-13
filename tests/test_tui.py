@@ -183,9 +183,25 @@ def test_pending_sizes_show_indicator(browser):
     b.status = "sizing 0/1"
     b.draw(b.rows())
     txt = scr.text()
-    assert "⟳ sizing 0/1" in txt
-    assert "…  " in txt and "Dead-abc" in txt  # size column indicator on the row
-    assert "> all  5B total · dead 0B …  " in txt and "derived-data  0B total · dead 0B …" in txt
+    assert "⠋ sizing 0/1" in txt
+    assert "   ⠋  " in txt and "Dead-abc" in txt  # size column indicator on the row
+    assert "> all  5B total · dead 0B ⠋  " in txt and "derived-data  0B total · dead 0B ⠋" in txt
+
+
+def test_pending_marks_spin_together_one_frame_per_scan_tick(browser):
+    """Every pending mark and the scan progress show the same spinner frame. The loop steps
+    it on each tick of a running scan; a key press redraws on the same frame."""
+    b, scr = browser
+    b.findings[0].size = None
+    b.status = "sizing 0/1"
+    b.loading = True
+    b.collect = lambda refresh: None
+    scr.keys = [-1, -1, ord("j"), ord("q")]
+    b.loop()
+    assert b.spin == 2
+    spins = [[c for c in "".join(f.values()) if c in tui.SPIN] for f in scr.frames]
+    assert [set(f) for f in spins] == [{"⠋"}, {"⠙"}, {"⠹"}, {"⠹"}]
+    assert len(spins[0]) == 5  # all, ios, derived-data, the finding's size, the progress
 
 
 def _dim_lines(scr):
@@ -217,7 +233,7 @@ def test_rows_still_being_scanned_are_grey(browser):
     scr.attrs.clear()
     b.draw(b.rows())
     assert _dim_lines(scr) == {0, 1}
-    assert scr.lines[1] == "  ▾ ios  15B total · dead 10B …"
+    assert scr.lines[1] == "  ▾ ios  15B total · dead 10B ⠋"
 
 
 def test_root_row_totals_everything_and_a_on_it_marks_all_dead(browser):
@@ -448,7 +464,7 @@ def test_narrow_header_drops_progress_then_sort_and_keeps_the_help_chip(browser)
     b, scr = browser
     b.status = "collecting 3/20 · sizing 5/40"
     left = "> all  15B total · dead 10B"
-    full = "⟳ collecting 3/20 · sizing 5/40   sort: verdict    ?"
+    full = "⠋ collecting 3/20 · sizing 5/40   sort: verdict    ?"
     for w, tail in ((83, full), (82, "sort: verdict    ?"), (49, "sort: verdict    ?"), (48, " ?")):
         scr.w = w
         b.draw(b.rows())
@@ -703,7 +719,7 @@ def test_scan_progress_sits_left_of_the_sort_on_the_all_row(colour_browser):
     b.disk = (400 * G, 1000 * G)
     b.status, b.msg = "collecting 3/20 · sizing 5/40", "revealed /dd/Dead-abc"
     b.draw(b.rows())
-    tail = "⟳ collecting 3/20 · sizing 5/40   sort: verdict    ?"
+    tail = "⠋ collecting 3/20 · sizing 5/40   sort: verdict    ?"
     left = "> all  3B total · dead 3B · 400.0G free"
     assert scr.lines[0] == left.ljust(scr.w - 2 - len(tail)) + tail
     sel = curses.A_REVERSE | curses.A_BOLD
@@ -714,16 +730,16 @@ def test_scan_progress_sits_left_of_the_sort_on_the_all_row(colour_browser):
         ("dead 3B", sel | b.colors["dead"]),
         (" · ", sel),
         ("400.0G free", sel),
-        ("⟳ collecting 3/20 · sizing 5/40", b.colors["key"] | curses.A_BOLD),
+        ("⠋ collecting 3/20 · sizing 5/40", b.colors["key"] | curses.A_BOLD),
         ("sort: verdict", curses.A_BOLD),
         (" ? ", b.key_attr),
     ]
     assert scr.lines[scr.h - 3] == "revealed /dd/Dead-abc"
-    b.findings, b.loading, b.status = [], True, "starting…"
+    b.findings, b.loading, b.status = [], True, "starting"
     scr.attrs.clear()
     b.draw(b.rows())
-    tail = "⟳ starting…   sort: verdict    ?"
-    assert scr.lines[0] == "  all  400.0G free …".ljust(scr.w - 2 - len(tail)) + tail
+    tail = "⠋ starting   sort: verdict    ?"
+    assert scr.lines[0] == "  all  400.0G free ⠋".ljust(scr.w - 2 - len(tail)) + tail
     assert scr.attrs[0][2] == curses.A_DIM
 
 
@@ -929,6 +945,7 @@ from mobile_broom import tui
 def main(scr):
     b = tui.Browser(scr, env=None, cfg=None, selectors=None)
     b.disk = (183_800_000_000, 994_610_155_520)
+    b.loading, b.status = True, "starting"  # the spinner goes out too
     b.draw([])
     b.draw_keys()
     scr.refresh()
@@ -969,4 +986,5 @@ def test_screen_and_keys_box_reach_a_rep_terminal_as_valid_utf8(tmp_path):
     assert reps, "the terminfo entry's rep was not used; the test proves nothing"
     assert all(c[0] < 0x80 for c in reps), reps
     assert b"-" in reps  # the box border arrived
+    assert "⠋".encode() in out  # the spinner arrived
     out.decode("utf-8")  # raises on a run of U+2588, which arrives as b"\x88\x1b[32b"
