@@ -30,7 +30,7 @@ Python ≥ 3.11, standard library only.
 # run without installing (always the latest commit)
 uvx --from git+https://github.com/bonkey/mobile-broom mobile-broom
 
-# install as a tool (commands: mobile-broom, mbroom)
+# install as a tool (commands: mobile-broom, mbr)
 uv tool install git+https://github.com/bonkey/mobile-broom
 uv tool upgrade mobile-broom
 
