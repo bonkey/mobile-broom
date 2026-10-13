@@ -128,7 +128,7 @@ def all_worktrees(cfg) -> dict[str, list[dict]]:
 
 @register("worktree-artifacts")
 def find_worktree_artifacts(env, cfg):
-    paseo_root = env.p(".paseo", "worktrees")
+    paseo_root = env.p(".paseo", "worktrees").resolve()
     for common, wts in all_worktrees(cfg).items():
         repo_name = Path(common).parent.name if Path(common).name == ".git" else Path(common).name
         for wt in wts:
@@ -137,9 +137,9 @@ def find_worktree_artifacts(env, cfg):
             yield from artifact_findings(wt, repo_name, cfg, "worktree-artifacts", "worktrees")
 
 
-@register("paseo-artifacts")
-def find_paseo_artifacts(env, cfg):
-    root = env.p(".paseo", "worktrees")
+def paseo_worktrees(env):
+    """Registered linked worktrees directly under Paseo's project directories."""
+    root = env.p(".paseo", "worktrees").resolve()
     for project_name in listdir(root):
         project = root / project_name
         if not project.is_dir() or project.is_symlink():
@@ -148,11 +148,17 @@ def find_paseo_artifacts(env, cfg):
             path = project / wt_name
             if not path.is_dir() or path.is_symlink() or (path / ".git").is_symlink():
                 continue
-            if not (path / ".git").exists():
+            if not (path / ".git").is_file():
                 continue
             wt = next((w for w in worktrees_of(str(path)) if w["path"] == str(path)), None)
             if wt:
-                yield from artifact_findings(wt, project_name, cfg, "paseo-artifacts", "paseo")
+                yield project_name, wt
+
+
+@register("paseo-artifacts")
+def find_paseo_artifacts(env, cfg):
+    for project_name, wt in paseo_worktrees(env):
+        yield from artifact_findings(wt, project_name, cfg, "paseo-artifacts", "paseo")
 
 
 def artifact_findings(wt, repo_name, cfg, category, group):
@@ -212,18 +218,19 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
-def live_worktree_names(cfg) -> set[str]:
+def live_worktree_names(env, cfg) -> set[str]:
     """Slugs a per-task simulator could be named after: every live worktree dir, the part
-    after the `<repo>.` prefix `wt` gives it, and its branch."""
+    after the `<repo>.` prefix `wt` gives it, and its branch, including Paseo worktrees."""
     names: set[str] = set()
-    for wts in all_worktrees(cfg).values():
-        for wt in wts:
-            base = Path(wt["path"]).name
-            names.add(slug(base))
-            if "." in base:
-                names.add(slug(base.split(".", 1)[1]))
-            if wt["branch"]:
-                names.add(slug(wt["branch"]))
+    wts = [wt for group in all_worktrees(cfg).values() for wt in group]
+    wts.extend(wt for _, wt in paseo_worktrees(env))
+    for wt in wts:
+        base = Path(wt["path"]).name
+        names.add(slug(base))
+        if "." in base:
+            names.add(slug(base.split(".", 1)[1]))
+        if wt["branch"]:
+            names.add(slug(wt["branch"]))
     return {n for n in names if n}
 
 
@@ -257,9 +264,9 @@ def find_worktree_simulators(env, cfg):
     adhoc = [d for d in env.simctl_devices() if d.get("isAvailable", True) and _adhoc(d, defaults)]
     if not adhoc:
         return
-    live = live_worktree_names(cfg)
+    live = live_worktree_names(env, cfg)
     if not live:
-        return  # no worktrees under the scan roots: nothing to cross-reference against
+        return  # no worktrees under the scan roots or Paseo: nothing to compare against
     for d in adhoc:
         name = d.get("name") or ""
         if named_after_live_worktree(name, live):

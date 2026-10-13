@@ -25,8 +25,8 @@ def git(cwd, *args):
     )
 
 
-def make_repo(home, name="ios-sdk"):
-    repo = home / "Projects" / name
+def make_repo(home, name="ios-sdk", parent="Projects"):
+    repo = home / parent / name
     mkfile(repo / "README.md", text="x")
     mkfile(repo / ".gitignore", text=".build\nPods\nnode_modules\n/target\n")
     git(repo, "init", "-q", "-b", "main")
@@ -129,6 +129,9 @@ def test_paseo_artifacts_use_home_layout_and_git_ignore(env, cfg, home):
 def test_paseo_artifacts_skip_non_worktrees_and_symlinks(env, cfg, home):
     root = home / ".paseo" / "worktrees"
     mkfile(root / "unmanaged" / "copy" / ".build" / "x", size=10)
+    clone = root / "unmanaged" / "clone"
+    mkfile(clone / ".build" / "x", size=10)
+    git(clone, "init", "-q")
     repo = make_repo(home)
     wt = root / "ios-sdk" / "feature"
     git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
@@ -138,6 +141,20 @@ def test_paseo_artifacts_skip_non_worktrees_and_symlinks(env, cfg, home):
     (wt.parent / "linked-worktree").symlink_to(wt, target_is_directory=True)
     fs = run_finders(["paseo-artifacts"], env, cfg)
     assert [f.action.path for f in fs] == [str(wt / ".build")]
+
+
+def test_paseo_artifacts_follow_symlinked_root_without_duplicates(env, cfg, home):
+    real = home.parent / "data" / ".paseo"
+    (real / "worktrees").mkdir(parents=True)
+    (home / ".paseo").symlink_to(real, target_is_directory=True)
+    repo = make_repo(home)
+    wt = home / ".paseo" / "worktrees" / "ios-sdk" / "feature"
+    git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
+    mkfile(wt / ".build" / "x", size=10)
+
+    fs = run_finders(["paseo-artifacts"], env, cfg)
+    assert [f.action.path for f in fs] == [str(real / "worktrees/ios-sdk/feature/.build")]
+    assert run_finders(["worktree-artifacts"], env, cfg) == []
 
 
 def test_paseo_group_clean_dry_run_preserves_worktree(env, home, capsys):
@@ -183,6 +200,16 @@ def test_worktree_simulators_are_dead_when_the_worktree_is_gone(env, cfg, home):
         "caregiver-elig",
         str(home / "Projects/ios-sdk.caregiver-elig"),
     )
+    outside = make_repo(home, name="other", parent="Outside")
+    git(
+        outside,
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "paseo-live",
+        str(home / ".paseo/worktrees/other/feature"),
+    )
     env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
     env.respond(
         ["xcrun", "simctl", "list", "devicetypes", "--json"],
@@ -209,6 +236,7 @@ def test_worktree_simulators_are_dead_when_the_worktree_is_gone(env, cfg, home):
             [
                 device("U-GONE", "MSP2-140-roi-accordion"),
                 device("U-LIVE", "caregiver-elig"),
+                device("U-PASEO", "paseo-live"),
                 device("U-BOOT", "old-branch-sim", state="Booted"),
                 device("U-STOCK", "iPhone 17 Pro"),
                 device("U-VARIANT", "iPhone 17 Pro (iOS 26)"),
