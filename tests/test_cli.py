@@ -13,6 +13,7 @@ from mobile_broom import env as env_mod
 
 def test_rewrite_argv_group_shorthand():
     assert cli.rewrite_argv(["ios"]) == ["audit", "ios"]
+    assert cli.rewrite_argv(["paseo"]) == ["audit", "paseo"]
     assert cli.rewrite_argv(["derived-data", "--json"]) == ["audit", "derived-data", "--json"]
     assert cli.rewrite_argv(["clean", "ios"]) == ["clean", "ios"]
     assert cli.rewrite_argv([]) == []

@@ -34,6 +34,7 @@ GROUPS: dict[str, list[str]] = {
         "gradle-build-cache",
     ],
     "worktrees": ["worktree-artifacts", "worktree-simulators", "orphan-derived-data"],
+    "paseo": ["paseo-artifacts"],
     "general": ["npm", "docker", "homebrew", "mise", "jetbrains"],
 }
 CATEGORY_GROUP = {c: g for g, cs in GROUPS.items() for c in cs}

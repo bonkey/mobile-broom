@@ -44,7 +44,8 @@ mise use -g "pipx:bonkey/mobile-broom"
 ```
 mobile-broom                          # TUI on a tty; full audit when piped
 mobile-broom audit                    # every group
-mobile-broom audit ios                # one group (ios · android · worktrees · general)
+mobile-broom audit ios                # one group (ios · android · worktrees · paseo · general)
+mobile-broom audit paseo             # Paseo worktree build artifacts
 mobile-broom ios                      # shorthand for `audit ios`
 mobile-broom audit runtimes avd       # individual categories
 mobile-broom audit --json | jq        # one record per finding
@@ -121,6 +122,7 @@ higher.
 | `gradle-caches` `gradle-dists` | versions in `~/.gradle/caches/<v>` + `wrapper/dists` vs `gradle-wrapper.properties` under the scan roots | delete |
 | `gradle-jdks` | `~/.gradle/jdks` majors vs `jvmToolchain(..)` / `JavaLanguageVersion.of(..)` in build files (inconclusive → review) | delete |
 | `worktree-artifacts` | `git worktree list --porcelain` per repo under the scan roots; one finding per artifact dir inside each worktree — `.build`, `build/`, `DerivedData` (and `.derivedData`, `derived_data`), `Derived` (tuist), `SourcePackages`, `node_modules`, `Pods`, `.gradle`, `Carthage/{Build,Checkouts}`, `vendor/bundle`, at the root or one level down. `git check-ignore` decides: ignored → shared (stale past `stale_days`), else review + locked. The worktree itself is never touched — `wt` owns lifecycle. | delete the artifact dir |
+| `paseo-artifacts` | Git worktrees under `~/.paseo/worktrees/<project>/<worktree>` (using the active home directory). Same artifact list, verdicts, and git-ignore check as `worktree-artifacts`. Paseo owns the worktree; only ignored artifact dirs inside it can be cleaned. | delete the artifact dir |
 | `worktree-simulators` | per-task simulators that outlived their worktree: the name is not its device type's default name and does not embed it (`iPhone 16 Pro (iOS 18)` is a variant, not a task), and no live worktree dir, `<repo>.<name>` suffix or branch under the scan roots matches it — a longer name containing it counts as a match. Skipped entirely when the scan finds no worktrees, so an empty scan never condemns anything. The runtime stays, so `simctl create` remakes the device | `xcrun simctl delete <udid>` |
 | `orphan-derived-data` | DerivedData keyed to a vanished worktree path — report-only cross-reference (act via `derived-data`) | — |
 | `npm` `homebrew` | `~/.npm/_cacache`, `_npx`, pnpm store/cache, yarn, `~/.bun/install/cache`, Homebrew cache + logs — pure download caches → shared | delete |
@@ -164,5 +166,5 @@ uv run mobile-broom audit ios
 
 ## Out of scope
 
-Worktree lifecycle (`wt` owns it), scheduling, and generic macOS caches (`mo clean` does those —
+Worktree lifecycle (`wt` or Paseo owns it), scheduling, and generic macOS caches (`mo clean` does those —
 `general` only reports them).
