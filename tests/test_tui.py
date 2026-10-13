@@ -3,15 +3,18 @@ and the background scan that fills the tree while keys keep working."""
 
 import curses
 import fcntl
+import json
 import os
 import re
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import termios
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -684,6 +687,107 @@ def test_quitting_mid_scan_stops_workers_promptly(browser, monkeypatch):
     assert (datetime.now(UTC) - t0).total_seconds() < 3  # not 20 walks × 0.4s
     assert len(sized) < 20 and not b.loading
     assert threading.active_count() == 1
+
+
+def test_quitting_while_a_finder_is_stuck_saves_sizes_and_says_so(browser, monkeypatch, tmp_path):
+    """Finder B is inside a git or simctl call and never sees the stop flag. stop() waits only
+    `timeout` for it, saves the sizes found so far and returns False, so run() can exit
+    without waiting for the call."""
+    b, scr = browser
+    b.findings = []
+    monkeypatch.setenv("MOBILE_BROOM_CONFIG_DIR", str(tmp_path / "cfg"))
+    dirs = [tmp_path / f"dd-{i}" for i in range(3)]
+    for d in dirs:
+        d.mkdir()
+        (d / "f").write_bytes(b"x" * 4096)
+    release = threading.Event()
+
+    def fake_run(cats, env, cfg):
+        (cat,) = cats
+        if cat == "derived-data":
+            return [
+                Finding(cat, "ios", d.name, [str(d)], "e", "dead", action=Action("remove", str(d)))
+                for d in dirs
+            ]
+        release.wait(10)
+        return []
+
+    def all_sized():
+        for _ in range(250):
+            if b._prog[2] == len(dirs):
+                return True
+            threading.Event().wait(0.02)
+        return False
+
+    monkeypatch.setattr(finders, "resolve", lambda sel: ["derived-data", "npm"])
+    monkeypatch.setattr(finders, "run", fake_run)
+    scr.getch = lambda: (all_sized(), ord("q"))[1]  # q once A is sized, B still stuck
+    try:
+        b.loop()
+        assert b._prog[2] == len(dirs) and b.loading
+        t0 = time.monotonic()
+        assert b.stop(0.2) is False
+        assert time.monotonic() - t0 < 1
+        cache = json.loads((tmp_path / "cfg" / "sizes.json").read_text())
+        assert set(cache) == {str(d) for d in dirs}
+    finally:
+        release.set()
+        b.wait(5)
+
+
+PTY_QUIT_CHILD = """
+import sys, threading
+from mobile_broom import finders, tui
+
+class Sizer:
+    workers = 2
+    def __init__(self, refresh=False, stop=None): pass
+    def save(self): pass
+
+def stuck(cats, env, cfg):
+    threading.Event().wait(30)  # a git call: it never looks at the stop flag
+    return []
+
+finders.resolve = lambda sel: ["npm"]
+finders.run = stuck
+tui.Sizer = Sizer
+sys.exit(tui.run(None, env=None, cfg=None))
+"""
+
+
+@pytest.mark.parametrize(("quit_with", "code"), [("q", 0), ("^C", 130)])
+def test_quitting_mid_scan_ends_the_process_while_a_finder_is_stuck(quit_with, code):
+    """The real curses in a pty. A finder stuck in a subprocess call must not keep the TUI
+    frozen, nor hold the process open on an empty screen once curses hands the terminal back."""
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+    env = dict(os.environ, TERM="xterm-256color")
+    child = subprocess.Popen(
+        [sys.executable, "-c", PTY_QUIT_CHILD], stdin=slave, stdout=slave, stderr=slave, env=env
+    )
+    os.close(slave)
+    out, sent = b"", None
+    try:
+        while select.select([master], [], [], 3)[0]:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:  # EIO once the child has exited
+                break
+            if not chunk:
+                break
+            out += chunk
+            if sent is None and b"collecting 0/1" in out:
+                if quit_with == "q":
+                    os.write(master, b"q")
+                else:
+                    child.send_signal(signal.SIGINT)
+                sent = time.monotonic()
+        assert sent is not None, out
+        assert child.wait(3) == code, out
+        assert time.monotonic() - sent < 2, out
+    finally:
+        os.close(master)
+        child.kill()
 
 
 def test_marked_size_shows_in_tree_rows_and_the_all_row(browser):
