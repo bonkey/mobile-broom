@@ -29,6 +29,7 @@ ARTIFACT_DIRS: dict[str, str] = {
     "node_modules": "npm/yarn/pnpm/bun install",
     "Pods": "pod install",
     ".gradle": "a gradle build",
+    "target": "cargo build",
     "Carthage/Build": "carthage bootstrap",
     "Carthage/Checkouts": "carthage bootstrap",
     "vendor/bundle": "bundle install",
