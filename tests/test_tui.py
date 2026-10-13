@@ -255,6 +255,10 @@ def test_root_row_totals_everything_and_a_on_it_marks_all_dead(browser):
     b.cur = 0
     b.handle_key(ord(" "), rows)
     assert b.marked == dead | {"gradle-caches:gradle"}
+    b.handle_key(ord("n"), rows)  # no unmark-all key: space on `all` again does it
+    assert b.marked == dead | {"gradle-caches:gradle"}
+    b.handle_key(ord(" "), rows)
+    assert b.marked == set()
     opened, closed = set(b.open), set(b.closed)
     for k in (curses.KEY_RIGHT, curses.KEY_LEFT, ord("l"), ord("h")):
         b.handle_key(k, rows)
@@ -767,7 +771,7 @@ def test_marking_keys_are_yellow_and_d_is_red(colour_browser):
     keys = {t.strip(): a for y, t, a in scr.attrs if a & curses.A_REVERSE}
     assert list(keys) == [k for k, _d in tui.HELP]
     assert keys["space"] == keys["a"] == b.mark_attr and keys["d"] == red
-    assert {keys[k] for k in ("↑↓ jk", "n", "s", "?", "q")} == {b.key_attr}
+    assert {keys[k] for k in ("↑↓ jk", "f", "s", "?", "q")} == {b.key_attr}
     assert len({b.mark_attr, red, b.key_attr}) == 3
 
 

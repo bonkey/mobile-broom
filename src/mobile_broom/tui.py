@@ -29,15 +29,14 @@ ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
 # (key, what it does) — keys are drawn as highlighted chips so they stand out from the prose
 HELP = [
     ("↑↓ jk", "move"),
-    ("→ ⏎", "expand"),
+    ("→ ⏎", "expand one level"),
     ("← h", "collapse"),
-    ("f", "fold/unfold branch"),
-    ("space", "mark"),
+    ("f", "expand all levels below; again: fold the findings away"),
+    ("space", "mark / unmark (on a heading: everything under it)"),
     ("a", "mark dead"),
-    ("n", "unmark"),
     ("d", "act"),
-    ("s", "sort"),
-    ("o", "reveal"),
+    ("s", "cycle sort: " + ", ".join(name for name, _key in SORTS)),
+    ("o", "reveal in Finder"),
     ("r", "rescan"),
     ("?", "keys"),
     ("q", "quit"),
@@ -757,8 +756,6 @@ class Browser:
         elif k == ord("a"):
             target = row if row.kind != "finding" else None
             self._toggle_all(target, lambda f: f.verdict == "dead" and f.action is not None)
-        elif k == ord("n"):
-            self.marked.clear()
         elif k == ord("d"):
             if self.loading:
                 self.msg = "scan still running — wait for it before acting"

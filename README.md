@@ -56,8 +56,8 @@ mobile-broom clean ios --trash        # move paths to ~/.Trash instead of deleti
 mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 ```
 
-TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · `f` on a heading unfolds everything under it, or, once all its findings show, folds them away (on `all`: the whole tree) · space mark · `a` mark all dead under
-the heading (on the top `all` row: everywhere) · `n` unmark all · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `s` cycle sort (verdict → size ↓ → date ↑, within each branch) · `o` reveal the finding's path in Finder · `r` rescan · `?` keys · `q`.
+TUI: `↑↓`/`jk` move · `→`/enter expand · `←`/`h` collapse · `f` on a heading unfolds everything under it, or, once all its findings show, folds them away (on `all`: the whole tree) · space mark or unmark (on a heading: everything under it) · `a` mark all dead under
+the heading (on the top `all` row: everywhere) · `d` act on marked (confirm screen shows the exact commands; `y` deletes, `t` trashes) · `s` cycle sort (verdict → size ↓ → date ↑, within each branch) · `o` reveal the finding's path in Finder · `r` rescan · `?` keys · `q`.
 
 The scan runs in the background, one worker per category: branches appear as their finder
 returns, and rows still being collected or sized are grey with a `…` until their sizes land
