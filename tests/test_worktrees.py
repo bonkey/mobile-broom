@@ -28,7 +28,7 @@ def git(cwd, *args):
 def make_repo(home, name="ios-sdk"):
     repo = home / "Projects" / name
     mkfile(repo / "README.md", text="x")
-    mkfile(repo / ".gitignore", text=".build\nPods\nnode_modules\n")
+    mkfile(repo / ".gitignore", text=".build\nPods\nnode_modules\n/target\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "init")
@@ -42,6 +42,7 @@ def test_worktree_artifacts_one_finding_per_ignored_dir(env, cfg, home):
     mkfile(repo / ".build" / "x", size=10)
     mkfile(repo / "ios" / "Pods" / "x", size=10)
     mkfile(repo / "DerivedData" / "x", size=10)  # not in .gitignore → locked
+    mkfile(repo / "target" / "x", size=10)
     wt = home / "Projects" / "ios-sdk.feature"
     git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     mkfile(wt / "node_modules" / "x", size=10)
@@ -51,6 +52,7 @@ def test_worktree_artifacts_one_finding_per_ignored_dir(env, cfg, home):
         "ios-sdk @ main: .build",
         "ios-sdk @ main: ios/Pods",
         "ios-sdk @ main: DerivedData",
+        "ios-sdk @ main: target",
         "ios-sdk @ feature: node_modules",
     }
     build = fs["ios-sdk @ main: .build"]
@@ -65,6 +67,8 @@ def test_worktree_artifacts_one_finding_per_ignored_dir(env, cfg, home):
     dd = fs["ios-sdk @ main: DerivedData"]
     assert dd.verdict == "review" and dd.action is None
     assert "not git-ignored" in dd.locked and "NOT git-ignored" in dd.evidence
+    target = fs["ios-sdk @ main: target"]
+    assert target.action.path == str(repo / "target") and "cargo build" in target.evidence
     feat = fs["ios-sdk @ feature: node_modules"]
     assert feat.action.kind == "remove" and feat.action.path == str(wt / "node_modules")
     assert "DIRTY" in feat.evidence and feat.extra["dirty"] is True
@@ -96,16 +100,28 @@ def test_paseo_artifacts_use_home_layout_and_git_ignore(env, cfg, home):
     git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     mkfile(wt / ".build" / "x", size=10)
     mkfile(wt / "DerivedData" / "x", size=10)
+    mkfile(wt / "src-tauri" / ".gitignore", text="target/\n")
+    mkfile(wt / "src-tauri" / "target" / "x", size=10)
+    mkfile(wt / "web" / "target" / "x", size=10)
     mkfile(repo / ".build" / "x", size=10)
 
     fs = {f.extra["artifact"]: f for f in run_finders(["paseo-artifacts"], env, cfg)}
-    assert set(fs) == {".build", "DerivedData"}
+    assert set(fs) == {".build", "DerivedData", "src-tauri/target", "web/target"}
     build = fs[".build"]
     assert build.group == "paseo" and build.category == "paseo-artifacts"
     assert build.action.path == str(wt / ".build") and build.verdict == "shared"
     assert build.extra["worktree"] == str(wt) and "Paseo owns lifecycle" in build.evidence
     assert fs["DerivedData"].action is None and "not git-ignored" in fs["DerivedData"].locked
+    rust = fs["src-tauri/target"]
+    assert rust.action.path == str(wt / "src-tauri" / "target")
+    assert rust.verdict == "shared" and "cargo build" in rust.evidence
+    assert fs["web/target"].action is None and "not git-ignored" in fs["web/target"].locked
     assert all(f.action is None or f.action.path != str(wt) for f in fs.values())
+    cfg.protected = [str(wt / "src-tauri" / "target")]
+    assert all(
+        f.extra["artifact"] != "src-tauri/target"
+        for f in run_finders(["paseo-artifacts"], env, cfg)
+    )
     other = run_finders(["worktree-artifacts"], env, cfg)
     assert [f.action.path for f in other] == [str(repo / ".build")]
 
@@ -117,6 +133,7 @@ def test_paseo_artifacts_skip_non_worktrees_and_symlinks(env, cfg, home):
     wt = root / "ios-sdk" / "feature"
     git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     mkfile(wt / ".build" / "x", size=10)
+    (wt / "target").symlink_to(wt / ".build", target_is_directory=True)
     (root / "linked-project").symlink_to(wt.parent, target_is_directory=True)
     (wt.parent / "linked-worktree").symlink_to(wt, target_is_directory=True)
     fs = run_finders(["paseo-artifacts"], env, cfg)
