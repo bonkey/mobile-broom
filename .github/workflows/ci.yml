@@ -55,8 +55,9 @@ jobs:
 
           if gh release view "$tag" > /dev/null 2>&1; then
             # BEFORE is all zeros for a new branch and may be unreachable after a force push.
-            if git cat-file -e "$BEFORE^{commit}" 2> /dev/null \
-              && ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- src; then
+            if ! git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
+              echo "::warning::Cannot read $BEFORE, so src/ was not checked for a missing bump."
+            elif ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- src; then
               echo "::error::src/ changed, but $tag is already released. Bump the version."
               exit 1
             fi
