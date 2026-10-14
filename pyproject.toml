@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mobile-broom"
-version = "0.1.28"
+version = "0.1.30"
 description = "A broom for iOS/Android dev machines: sweeps out what is provably dead to win back disk space"
 readme = "README.md"
 license = "MIT"
