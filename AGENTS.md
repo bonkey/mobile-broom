@@ -16,10 +16,14 @@ Steps for every release (patch bump is the default; don't agonize over semver):
    - `pyproject.toml` → `[project] version`
    - `src/mobile_broom/__init__.py` → `__version__`
 2. Commit the bump together with your changes.
-3. `just release` — runs fmt + tests, tags `v<version>` from pyproject, pushes with tags,
-   and creates the GitHub release (`gh release create … --generate-notes`).
+3. Push to `main` (or merge the PR). `.github/workflows/ci.yml` runs the checks, then tags
+   `v<version>` and creates the GitHub release. It skips a version that is already released, and
+   fails when `src/` changed without a bump, when the two versions differ, or when the version is
+   not newer than the latest release.
 
-Manual equivalent if `just` is unavailable:
+Manual fallback when the workflow cannot run: `just release` runs fmt + tests, tags
+`v<version>` from pyproject, pushes with tags, and creates the GitHub release
+(`gh release create … --generate-notes`). Equivalent if `just` is unavailable:
 
 ```sh
 uv run pytest -q
