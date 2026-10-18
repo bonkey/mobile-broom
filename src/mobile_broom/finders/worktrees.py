@@ -1,5 +1,5 @@
-"""Worktree finders. The worktree itself is never touched (`wt` owns lifecycle); what gets
-an action is the build residue inside it — `.build`, `DerivedData`, `Pods`, `node_modules`, … —
+"""Worktree finders. The worktree itself is never touched (`wt` or Paseo owns lifecycle).
+What gets an action is build residue inside it — `.build`, `DerivedData`, `Pods`, `node_modules`, … —
 one finding per artifact dir, removable on its own when git ignores it."""
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ ARTIFACT_DIRS: dict[str, str] = {
     "node_modules": "npm/yarn/pnpm/bun install",
     "Pods": "pod install",
     ".gradle": "a gradle build",
+    "target": "cargo build",
     "Carthage/Build": "carthage bootstrap",
     "Carthage/Checkouts": "carthage bootstrap",
     "vendor/bundle": "bundle install",
@@ -127,78 +128,109 @@ def all_worktrees(cfg) -> dict[str, list[dict]]:
 
 @register("worktree-artifacts")
 def find_worktree_artifacts(env, cfg):
+    paseo_root = env.p(".paseo", "worktrees").resolve()
     for common, wts in all_worktrees(cfg).items():
         repo_name = Path(common).parent.name if Path(common).name == ".git" else Path(common).name
         for wt in wts:
-            if wt["bare"]:
+            if Path(wt["path"]).parent.parent == paseo_root:
                 continue
-            arts = artifact_dirs(wt["path"])
-            if not arts:
+            yield from artifact_findings(wt, repo_name, cfg, "worktree-artifacts", "worktrees")
+
+
+def paseo_worktrees(env):
+    """Registered linked worktrees directly under Paseo's project directories."""
+    root = env.p(".paseo", "worktrees").resolve()
+    for project_name in listdir(root):
+        project = root / project_name
+        if not project.is_dir() or project.is_symlink():
+            continue
+        for wt_name in listdir(project):
+            path = project / wt_name
+            if not path.is_dir() or path.is_symlink() or (path / ".git").is_symlink():
                 continue
-            ignored = ignored_paths(wt["path"], arts)
-            dirty = bool(_git(wt["path"], "status", "--porcelain").strip())
-            last = _git(wt["path"], "log", "-1", "--format=%cI").strip()
-            branch = wt["branch"] or ("detached" if wt["detached"] else "?")
-            wt_bits = [
-                "worktree DIRTY (uncommitted changes)" if dirty else "worktree clean",
-                f"last commit {when(last)}" if last else "no commits",
-                "worktree itself untouched (`wt` owns lifecycle)",
-            ]
-            for art in arts:
-                rel = os.path.relpath(art, wt["path"])
-                parts = rel.split(os.sep)
-                key = next(
-                    (k for k in ("/".join(parts[-2:]), parts[-1]) if k in ARTIFACT_DIRS), None
-                )
-                regen = ARTIFACT_DIRS.get(key, "a rebuild")
-                mt = mtime_of(art)
-                age = age_days(mt)
-                bits = [f"{regen} recreates it", f"modified {when(mt)}"]
-                if art in ignored:
-                    verdict = "stale" if age is not None and age > cfg.stale_days else "shared"
-                    action, locked = Action(kind="remove", path=art), None
-                    bits.insert(0, "git-ignored build artifact")
-                else:
-                    verdict, action = "review", None
-                    locked = "not git-ignored, so it may hold tracked or hand-made files"
-                    bits.insert(0, "NOT git-ignored")
-                yield Finding(
-                    category="worktree-artifacts",
-                    group="worktrees",
-                    label=f"{repo_name} @ {branch}: {rel}",
-                    paths=[art],
-                    evidence="; ".join(bits + wt_bits),
-                    last=mt,
-                    verdict=verdict,
-                    action=action,
-                    locked=locked,
-                    extra={
-                        "worktree": wt["path"],
-                        "branch": wt["branch"],
-                        "dirty": dirty,
-                        "repo": repo_name,
-                        "artifact": rel,
-                        "ignored": art in ignored,
-                    },
-                )
+            if not (path / ".git").is_file():
+                continue
+            wt = next((w for w in worktrees_of(str(path)) if w["path"] == str(path)), None)
+            if wt:
+                yield project_name, wt
+
+
+@register("paseo-artifacts")
+def find_paseo_artifacts(env, cfg):
+    for project_name, wt in paseo_worktrees(env):
+        yield from artifact_findings(wt, project_name, cfg, "paseo-artifacts", "paseo")
+
+
+def artifact_findings(wt, repo_name, cfg, category, group):
+    if wt["bare"]:
+        return
+    arts = artifact_dirs(wt["path"])
+    if not arts:
+        return
+    ignored = ignored_paths(wt["path"], arts)
+    dirty = bool(_git(wt["path"], "status", "--porcelain").strip())
+    last = _git(wt["path"], "log", "-1", "--format=%cI").strip()
+    branch = wt["branch"] or ("detached" if wt["detached"] else "?")
+    owner = "Paseo" if group == "paseo" else "`wt`"
+    wt_bits = [
+        "worktree DIRTY (uncommitted changes)" if dirty else "worktree clean",
+        f"last commit {when(last)}" if last else "no commits",
+        f"worktree itself untouched ({owner} owns lifecycle)",
+    ]
+    for art in arts:
+        rel = os.path.relpath(art, wt["path"])
+        parts = rel.split(os.sep)
+        key = next((k for k in ("/".join(parts[-2:]), parts[-1]) if k in ARTIFACT_DIRS), None)
+        regen = ARTIFACT_DIRS.get(key, "a rebuild")
+        mt = mtime_of(art)
+        age = age_days(mt)
+        bits = [f"{regen} recreates it", f"modified {when(mt)}"]
+        if art in ignored:
+            verdict = "stale" if age is not None and age > cfg.stale_days else "shared"
+            action, locked = Action(kind="remove", path=art), None
+            bits.insert(0, "git-ignored build artifact")
+        else:
+            verdict, action = "review", None
+            locked = "not git-ignored, so it may hold tracked or hand-made files"
+            bits.insert(0, "NOT git-ignored")
+        yield Finding(
+            category=category,
+            group=group,
+            label=f"{repo_name} @ {branch}: {rel}",
+            paths=[art],
+            evidence="; ".join(bits + wt_bits),
+            last=mt,
+            verdict=verdict,
+            action=action,
+            locked=locked,
+            extra={
+                "worktree": wt["path"],
+                "branch": wt["branch"],
+                "dirty": dirty,
+                "repo": repo_name,
+                "artifact": rel,
+                "ignored": art in ignored,
+            },
+        )
 
 
 def slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
-def live_worktree_names(cfg) -> set[str]:
+def live_worktree_names(env, cfg) -> set[str]:
     """Slugs a per-task simulator could be named after: every live worktree dir, the part
-    after the `<repo>.` prefix `wt` gives it, and its branch."""
+    after the `<repo>.` prefix `wt` gives it, and its branch, including Paseo worktrees."""
     names: set[str] = set()
-    for wts in all_worktrees(cfg).values():
-        for wt in wts:
-            base = Path(wt["path"]).name
-            names.add(slug(base))
-            if "." in base:
-                names.add(slug(base.split(".", 1)[1]))
-            if wt["branch"]:
-                names.add(slug(wt["branch"]))
+    wts = [wt for group in all_worktrees(cfg).values() for wt in group]
+    wts.extend(wt for _, wt in paseo_worktrees(env))
+    for wt in wts:
+        base = Path(wt["path"]).name
+        names.add(slug(base))
+        if "." in base:
+            names.add(slug(base.split(".", 1)[1]))
+        if wt["branch"]:
+            names.add(slug(wt["branch"]))
     return {n for n in names if n}
 
 
@@ -232,9 +264,9 @@ def find_worktree_simulators(env, cfg):
     adhoc = [d for d in env.simctl_devices() if d.get("isAvailable", True) and _adhoc(d, defaults)]
     if not adhoc:
         return
-    live = live_worktree_names(cfg)
+    live = live_worktree_names(env, cfg)
     if not live:
-        return  # no worktrees under the scan roots: nothing to cross-reference against
+        return  # no worktrees under the scan roots or Paseo: nothing to compare against
     for d in adhoc:
         name = d.get("name") or ""
         if named_after_live_worktree(name, live):
