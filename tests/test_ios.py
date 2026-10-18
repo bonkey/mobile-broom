@@ -3,6 +3,7 @@ import plistlib
 
 from conftest import days_ago, mkfile, simctl_devices_json, write_images_plist
 
+from mobile_broom.engine import select_for_clean
 from mobile_broom.finders import run as run_finders
 from mobile_broom.finders.ios import runtime_name
 
@@ -390,6 +391,98 @@ def test_previews_both_device_sets(env, cfg, home):
     )
     assert fs["Previews/Simulator%20Devices"].verdict == "shared"
     assert "percent-encoded" in fs["Previews/Simulator%20Devices"].evidence
+
+
+def test_xctest_devices_scope_and_safety(env, cfg, home):
+    root = home / "Library/Developer/XCTestDevices"
+    cases = {
+        "STALE": ("Shutdown", True, 40),
+        "FRESH": ("Shutdown", True, 1),
+        "BOOTED": ("Booted", True, 40),
+        "UNAVAILABLE": ("Shutdown", False, None),
+        "UNKNOWN": ("Shutdown", True, None),
+        "INVALID_DATE": ("Shutdown", True, "not-a-date"),
+        "INVALID_DATE_TYPE": ("Shutdown", True, {"bad": "date"}),
+        "OLD_NO_DATE": ("Shutdown", True, None),
+        "FRESH_CLONE": ("Shutdown", True, None),
+        "ODD_STATE": ("Creating", True, 40),
+        "WRONG_PATH": ("Shutdown", True, 40),
+        "INVALID_PATH": ("Shutdown", True, None),
+        "MISSING": (None, None, None),
+    }
+    devices = []
+    for udid, (state, available, age) in cases.items():
+        path = root / udid
+        mkfile(path / "data" / "file", size=10)
+        if udid in ("OLD_NO_DATE", "FRESH_CLONE"):
+            run_dir = path / "data/var/run"
+            run_dir.mkdir(parents=True)
+            os.utime(run_dir, (days_ago(40).timestamp(), days_ago(40).timestamp()))
+        with (path / "device.plist").open("wb") as fh:
+            plistlib.dump({"UDID": udid, "name": f"Clone {udid}"}, fh)
+        if udid == "OLD_NO_DATE":
+            os.utime(path / "device.plist", (days_ago(40).timestamp(), days_ago(40).timestamp()))
+        if state:
+            device = {
+                "udid": udid,
+                "name": f"Clone {udid}",
+                "state": state,
+                "isAvailable": available,
+                "dataPath": (
+                    {"bad": "path"}
+                    if udid == "INVALID_PATH"
+                    else str(path / "data" if udid != "WRONG_PATH" else root / "elsewhere")
+                ),
+            }
+            if age is not None:
+                device["lastBootedAt"] = days_ago(age).isoformat() if isinstance(age, int) else age
+            devices.append(device)
+    env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    env.respond(
+        ["xcrun", "simctl", "--set", str(root), "list", "devices", "--json"],
+        simctl_devices_json(
+            [{"runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-3", **d} for d in devices]
+        ),
+    )
+    fs = {f.extra["udid"]: f for f in run_finders(["xctest-devices"], env, cfg)}
+    assert set(fs) == set(cases)
+    assert fs["STALE"].verdict == "stale"
+    assert fs["STALE"].action.argv == ["xcrun", "simctl", "--set", str(root), "delete", "STALE"]
+    assert fs["STALE"].paths == [str(root / "STALE")]
+    assert fs["FRESH"].verdict == "review" and fs["FRESH"].action is None
+    assert fs["BOOTED"].locked and fs["BOOTED"].action is None and fs["BOOTED"].unlock is None
+    assert fs["UNAVAILABLE"].verdict == "dead" and fs["UNAVAILABLE"].action is not None
+    assert fs["UNKNOWN"].locked and fs["UNKNOWN"].action is None
+    assert fs["INVALID_DATE"].locked and fs["INVALID_DATE"].action is None
+    assert fs["INVALID_DATE_TYPE"].locked and fs["INVALID_DATE_TYPE"].action is None
+    assert fs["OLD_NO_DATE"].verdict == "stale"
+    assert fs["FRESH_CLONE"].verdict == "review" and fs["FRESH_CLONE"].action is None
+    assert fs["ODD_STATE"].locked and fs["ODD_STATE"].action is None
+    assert fs["WRONG_PATH"].locked and fs["WRONG_PATH"].action is None
+    assert fs["INVALID_PATH"].locked and fs["INVALID_PATH"].action is None
+    assert fs["MISSING"].locked and fs["MISSING"].action is None
+    assert {f.extra["udid"] for f in select_for_clean(list(fs.values()))} == {"UNAVAILABLE"}
+    assert {f.extra["udid"] for f in select_for_clean(list(fs.values()), stale=True)} == {
+        "UNAVAILABLE",
+        "STALE",
+        "OLD_NO_DATE",
+    }
+
+
+def test_xctest_devices_simctl_failure_reports_locked_clones(env, cfg, home):
+    root = home / "Library/Developer/XCTestDevices"
+    mkfile(root / "ONE" / "device.plist", text="bad plist")
+    env.respond(
+        ["xcrun", "simctl", "list", "runtimes", "--json"],
+        returncode=1,
+        stderr="Connection invalid",
+    )
+    fs = run_finders(["xctest-devices"], env, cfg)
+    assert len(fs) == 1
+    assert fs[0].paths == [str(root / "ONE")]
+    assert fs[0].verdict == "review" and fs[0].action is None
+    assert env.simctl_error in fs[0].locked
+    assert not any("--set" in call for call in env.calls)
 
 
 def test_misc_ios_caches(env, cfg, home):
