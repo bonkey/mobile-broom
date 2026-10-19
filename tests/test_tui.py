@@ -18,6 +18,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from conftest import FakeEnv, simctl_devices_json
 
 from mobile_broom import actions, finders, tui
 from mobile_broom.model import Action, Finding, Unlock
@@ -413,9 +414,55 @@ def test_broken_finder_is_reported_not_fatal(browser, monkeypatch):
     assert not b.loading and b.findings == [] and "npm: boom" in b.msg
 
 
+def test_rescan_asks_simctl_again(browser, monkeypatch, home, cfg):
+    """Simulators deleted since the last scan are gone from the next one, as after a restart."""
+    b, _scr = browser
+    b.findings = []
+    b.env, b.cfg = FakeEnv(home), cfg
+    b.env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    devices = ["xcrun", "simctl", "list", "devices", "--json"]
+    b.env.respond(
+        devices,
+        simctl_devices_json(
+            [
+                {
+                    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+                    "udid": "U-OLD",
+                    "name": "iPhone 17 Pro",
+                    "state": "Shutdown",
+                    "isAvailable": False,
+                    "availabilityError": 'runtime profile not found using "System" match policy',
+                }
+            ]
+        ),
+    )
+
+    class FakeSizer:
+        workers = 1
+
+        def __init__(self, refresh=False, stop=None):
+            pass
+
+        def save(self):
+            pass
+
+    monkeypatch.setattr(finders, "resolve", lambda sel: ["sim-devices"])
+    monkeypatch.setattr(tui, "Sizer", FakeSizer)
+    b.collect(refresh=False)
+    b.wait(5)
+    assert [f.label for f in b.findings] == ["iPhone 17 Pro · iOS 26.4"]
+    b.env.respond(devices, {"devices": {}})  # `xcrun simctl delete unavailable` ran
+    b.collect(refresh=True)
+    b.wait(5)
+    assert not b.loading and b.findings == [] and b.msg == ""
+
+
 def test_act_draws_live_status_per_position(browser, monkeypatch):
     b, scr = browser
     marked = [b.findings[0]]
+    b.marked = {marked[0].key}
+    rescans = []
+    b.collect = lambda refresh: rescans.append(refresh)
     monkeypatch.setattr(actions, "remove", lambda p, trash=False: "deleted")
     b.act(marked, trash=False)
     frames = ["\n".join(f.values()) for f in scr.frames]
@@ -423,7 +470,59 @@ def test_act_draws_live_status_per_position(browser, monkeypatch):
     assert any("⟳ busy" in f and "derived-data/Dead-abc" in f for f in frames)
     assert "✓ ok" in frames[-1] and "deleted" in frames[-1]
     assert "done: 1 ok, 0 failed, 0 manual" in frames[-1]
-    assert [f.label for f in b.findings] == ["iPhone · iOS 27"]
+    assert b.marked == set() and rescans == [False]  # the rescan reuses cached sizes
+
+
+def test_act_rescans_so_devices_a_shared_action_removed_are_gone(browser, monkeypatch, home, cfg):
+    """`simctl delete unavailable` for one marked device deletes every unavailable one."""
+    b, _scr = browser
+    b.findings = []
+    b.env, b.cfg = FakeEnv(home), cfg
+    b.env.respond(["xcrun", "simctl", "list", "runtimes", "--json"], {"runtimes": []})
+    devices = ["xcrun", "simctl", "list", "devices", "--json"]
+    b.env.respond(
+        devices,
+        simctl_devices_json(
+            [
+                {
+                    "runtime": f"com.apple.CoreSimulator.SimRuntime.iOS-{rt}",
+                    "udid": udid,
+                    "name": name,
+                    "state": "Shutdown",
+                    "isAvailable": False,
+                    "availabilityError": "runtime profile not found",
+                }
+                for rt, udid, name in (("26-4", "U-1", "iPhone 17 Pro"), ("18-0", "U-2", "iPad"))
+            ]
+        ),
+    )
+
+    class FakeSizer:
+        workers = 1
+
+        def __init__(self, refresh=False, stop=None):
+            pass
+
+        def save(self):
+            pass
+
+    monkeypatch.setattr(finders, "resolve", lambda sel: ["sim-devices"])
+    monkeypatch.setattr(tui, "Sizer", FakeSizer)
+    b.collect(refresh=False)
+    b.wait(5)
+    assert [f.label for f in b.findings] == ["iPhone 17 Pro · iOS 26.4", "iPad · iOS 18.0"]
+    ran = []
+
+    def simctl(argv, **_kw):
+        ran.append(argv)
+        b.env.respond(devices, {"devices": {}})
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(actions.subprocess, "run", simctl)
+    b.act(b.findings[:1], trash=False)
+    b.wait(5)
+    assert ran == [["xcrun", "simctl", "delete", "unavailable"]]
+    assert not b.loading and b.findings == []
 
 
 def test_bottom_lines_hold_message_and_detail_and_the_only_chip_is_help(browser):
@@ -964,6 +1063,9 @@ class DiskEnv:
     def __init__(self, *readings):
         self.readings = list(readings)
 
+    def forget(self):
+        pass
+
     def disk_usage(self):
         return self.readings.pop(0)
 
@@ -971,7 +1073,9 @@ class DiskEnv:
 def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, monkeypatch):
     b, scr = browser
     found = b.findings
-    b.env = DiskEnv((400 * G, 1000 * G), (390 * G, 1000 * G), (410_500_000_000, 1000 * G))
+    b.env = DiskEnv(
+        (400 * G, 1000 * G), (390 * G, 1000 * G), (410_500_000_000, 1000 * G), (411 * G, 1000 * G)
+    )
 
     class FakeSizer:
         workers = 1
@@ -989,16 +1093,23 @@ def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, mon
     monkeypatch.setattr(tui, "Sizer", FakeSizer)
     b.loop()  # reads once at startup, starts the scan; q quits at once
     b.wait(5)
-    assert b.disk == (390 * G, 1000 * G) and b.env.readings == [(410_500_000_000, 1000 * G)]
+    assert b.disk == (390 * G, 1000 * G) and len(b.env.readings) == 2
     b.marked = {"derived-data:Dead-abc"}
     next(f for f in b.findings if f.label == "Dead-abc").size = 5 * G
     for _ in range(3):  # redraws reuse the reading
         b.draw(b.rows())
     assert " · marked 5.0G · 390.0G free → 395.0G  " in scr.lines[0]
-    monkeypatch.setattr(actions, "remove", lambda p, trash=False: "deleted")
+
+    def remove(p, trash=False):
+        found[:] = [f for f in found if f.paths[0] != p]
+        return "deleted"
+
+    monkeypatch.setattr(actions, "remove", remove)
     b.act([f for f in b.findings if f.label == "Dead-abc"], trash=False)
+    assert b.disk == (410_500_000_000, 1000 * G)  # read before the rescan finishes
+    b.wait(5)
     b.draw(b.rows())
-    assert scr.lines[0].startswith("> all  5B total · dead 0B · 410.5G free  ")
+    assert scr.lines[0].startswith("> all  5B total · dead 0B · 411.0G free  ")
     assert b.env.readings == []
 
 

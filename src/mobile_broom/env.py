@@ -96,6 +96,13 @@ class Env:
             self._cache[ck] = val
             return val
 
+    def forget(self):
+        """Drop memoised results and the simctl probe, so the next scan sees the machine now."""
+        with self._lock:
+            self._cache.clear()
+            self._simctl_probed = False
+            self.simctl_error = None
+
     def which(self, name: str) -> str | None:
         found = shutil.which(name, path=self.environ.get("PATH"))
         if found:
