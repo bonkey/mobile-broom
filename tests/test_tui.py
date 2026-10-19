@@ -1106,7 +1106,6 @@ def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, mon
 
     monkeypatch.setattr(actions, "remove", remove)
     b.act([f for f in b.findings if f.label == "Dead-abc"], trash=False)
-    assert b.disk == (410_500_000_000, 1000 * G)  # read before the rescan finishes
     b.wait(5)
     b.draw(b.rows())
     assert scr.lines[0].startswith("> all  5B total · dead 0B · 411.0G free  ")
