@@ -227,6 +227,8 @@ class Browser:
         if self.loading:
             self.msg = "scan already running"
             return
+        if self.env is not None:
+            self.env.forget()  # `d` or anything else may have changed the machine since
         with self._lock:
             self.findings = []
             self._errors = []
@@ -631,13 +633,14 @@ class Browser:
 
         draw(f"{verb} 0/{n} …")
         results = actions.execute(marked, trash=trash, out=io.StringIO(), progress=progress)
-        gone = {r.finding.key for r in results if r.ok}
-        self.findings = [f for f in self.findings if f.key not in gone]
-        self.marked -= gone
+        self.marked -= {r.finding.key for r in results if r.ok}
         self.read_disk()
         draw(actions.summary(results), done=True)
         scr.getch()
         self.msg = actions.summary(results)
+        # One action can remove unmarked findings too (`simctl delete unavailable` takes every
+        # unavailable device), so list what is left. Unchanged paths keep their cached sizes.
+        self.collect(refresh=False)
 
     def unlock(self, f: Finding):
         """Offer to run `f.unlock` (e.g. shut a booted simulator down). On success the finding

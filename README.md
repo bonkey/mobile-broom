@@ -81,7 +81,10 @@ newest first; the heading takes space/`a` like a category and `←` folds it. `[
 (`locked: device is booted; shut it down first`), and space on it repeats the reason. On a
 booted simulator device space asks first, then runs `xcrun simctl shutdown <udid>` and marks it. `d` shows
 every position with a live status (`· wait` → `⟳ busy` → `✓ ok` / `✗ FAIL` / `! manual`) as
-it runs; `clean` prints the same one line per finding.
+it runs; `clean` prints the same one line per finding. Then the browser rescans with cached
+sizes, so the tree shows what is left, including unmarked findings an action removed too
+(`xcrun simctl delete unavailable` deletes every unavailable device). `r` rescans and measures
+every size again.
 
 ### Verdicts
 
