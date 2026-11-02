@@ -51,7 +51,6 @@ LEGEND = [
     "⠋   grey, spinning: still being collected or sized (scan in progress)",
     "all top row — space and a on it cover every finding",
     "    free → N: the free space once the marked findings are gone is at most N",
-    "    purgeable: space macOS frees on demand; total = free + purgeable",
     "date column: last use/modification the verdict is based on, and its age in days",
 ]
 ICON = {
