@@ -19,7 +19,7 @@ ios
     ...
 candidates: dead 42.3G (6) · stale 5.9G (1) · shared 11.5G (10) · review 50.5G (11)
   (each path sized on its own; APFS clones may overlap — not a reclaim promise)
-disk  52% used · 475.9G free of 994.6G
+disk  52% used of 994.6G (free: 475.9G, purgeable: 28.5G, total: 504.4G)
 ```
 
 ## Install
@@ -65,9 +65,11 @@ returns, and rows still being collected or sized are grey with a spinner (`⠋`)
 sizes land (same on `r`). You can move,
 expand and mark while it runs; `d` waits for the scan to finish. The top line is the `all`
 row, which stays in place while the tree scrolls. It shows `total · dead · marked` for every
-finding and the free space on the disk that holds your home folder (`444.0G free`). While
-anything is marked it adds `→ <free + marked>`. That is a ceiling, not a promise: marked sizes
-are candidates, and `t` (move to `~/.Trash`) frees nothing until the Trash is emptied. The disk
+finding and the space on the disk that holds your home folder
+(`(free: 4.7G, purgeable: 26.4G, total: 31.1G)`, or `444.0G free` when macOS gives no purgeable
+figure). While anything is marked the free part adds `→ <free + marked>`. That is a ceiling,
+not a promise: marked sizes are candidates, and `t` (move to `~/.Trash`) frees nothing until
+the Trash is emptied. The disk
 is read at startup, when a scan finishes and after `d`. At its right end are the scan progress
 (`⠋ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
 every key (marking keys in yellow, `d` in red) and what the marks mean. Every group and category
@@ -101,10 +103,11 @@ VM disk image, …) — shown in the TUI, the text report and `--json`.
 Totals are labelled **candidates**: each path is sized on its own (`st_blocks`), so APFS
 clones can overlap and the sum is not a reclaim promise.
 
-The disk figures (TUI `all` row, last line of the text report; not in `--json`) are the `statvfs`
-free space of the volume that holds your home folder, the same figure `df` shows. Finder's "available"
-also counts purgeable space (local snapshots, evictable iCloud files), so it can read a few GB
-higher.
+The disk figures (TUI `all` row, last line of the text report; not in `--json`) are for the
+volume that holds your home folder. `free` is the `statvfs` free space, the same figure `df` shows.
+`total` is what Finder shows as available and DaisyDisk as free + purgeable
+(`kCFURLVolumeAvailableCapacityForImportantUsageKey`). `purgeable` is the difference: local
+snapshots, caches and evictable iCloud files that macOS deletes when space runs short.
 
 ## What it checks and why
 

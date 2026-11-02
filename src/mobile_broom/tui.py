@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 from . import actions, finders
 from .model import GROUPS, VERDICT_RANK, Finding, bucket_key, sort_key
-from .render import last_col
+from .render import last_col, purgeable_text
 from .sizer import Cancelled, Sizer, human
 
 TICK_MS = 100  # how often the loop redraws while a scan fills the tree in the background
@@ -94,15 +94,17 @@ def _totals(fs: list[Finding], marked: set[str]) -> list[tuple[str, str]]:
     return pieces
 
 
-def _free(usage: tuple[int, int], marked: int) -> str:
+def _free(usage: tuple[int, int], marked: int, free_purgeable: int | None = None) -> str:
     """'444.0G free', plus '→ 456.2G' while something is marked: the free space once the
     marked findings are gone. That is a ceiling: marked sizes are candidates, and clones or
-    shared files can free less. The marked part is capped at the used space."""
+    shared files can free less. The marked part is capped at the used space. With a
+    free + purgeable reading: '(free: 4.7G → 9.7G, purgeable: 26.4G, total: 31.1G)'."""
     free, total = usage
-    text = f"{human(free).strip()} free"
-    if marked:
-        text += f" → {human(free + min(marked, total - free)).strip()}"
-    return text
+    shown = human(free).strip()
+    projected = f" → {human(free + min(marked, total - free)).strip()}" if marked else ""
+    if free_purgeable is None:
+        return f"{shown} free{projected}"
+    return purgeable_text(shown + projected, free, free_purgeable)
 
 
 def _controls(status: str, spin: str, sort: str, room: int) -> list[tuple[str, str]]:
@@ -174,6 +176,7 @@ class Browser:
         self.msg = ""
         self.status = ""  # collecting/sizing progress shown above the tree
         self.disk: tuple[int, int] | None = None  # (free, total) of HOME's volume, for the bar
+        self.free_purgeable: int | None = None  # free + purgeable bytes of that volume
         self.loading = False  # a background scan is filling self.findings
         self.spin = 0  # SPIN frame; the loop steps it on every tick of a scan
         self.anchor: str | None = None  # row key to keep the cursor on while rows shift
@@ -251,6 +254,7 @@ class Browser:
         Redraws reuse them."""
         if self.env is not None:
             self.disk = self.env.disk_usage()
+            self.free_purgeable = self.env.disk_free_purgeable()
 
     def stop(self, timeout: float = 10.0) -> bool:
         """Abandon a running scan: queued tasks are dropped, walks in flight bail at their next
@@ -519,12 +523,13 @@ class Browser:
         totals are cut short."""
         scr = self.scr
         _h, w = scr.getmaxyx()
-        findings, disk = self.findings, self.disk  # snapshots: the scan thread replaces them
+        # snapshots: the scan thread replaces them
+        findings, disk, purgeable = self.findings, self.disk, self.free_purgeable
         body = _totals(findings, self.marked) if findings else []
         if disk:
             marked = sum(f.size or 0 for f in findings if f.key in self.marked)
             body += [(" · ", "")] if body else []
-            body.append((_free(disk, marked), ""))
+            body.append((_free(disk, marked, purgeable), ""))
         sel = root is not None and self.cur == 0
         pending = root.pending if root else self.loading
         left = [(f"{'>' if sel else ' '} all", "")] + ([("  ", ""), *body] if body else [])

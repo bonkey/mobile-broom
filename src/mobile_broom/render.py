@@ -24,11 +24,28 @@ def last_col(dt: datetime | None) -> str:
     return f"{dt.date().isoformat()} {age:>4}d"
 
 
-def disk_text(usage: tuple[int, int], of_total: bool = True) -> str:
-    """'52% used · 475.9G free of 994.6G' from an Env.disk_usage() reading."""
+def disk_text(
+    usage: tuple[int, int], of_total: bool = True, free_purgeable: int | None = None
+) -> str:
+    """'52% used · 475.9G free of 994.6G' from an Env.disk_usage() reading. With an
+    Env.disk_free_purgeable() reading: '98% used of 245.1G (free: 4.7G, purgeable: 26.4G,
+    total: 31.1G)'."""
     free, total = usage
-    text = f"{round(100 * (total - free) / total)}% used · {human(free).strip()} free"
-    return text + (f" of {human(total).strip()}" if of_total else "")
+    text = f"{round(100 * (total - free) / total)}% used"
+    of = f" of {human(total).strip()}" if of_total else ""
+    if free_purgeable is not None:
+        return f"{text}{of} {purgeable_text(human(free).strip(), free, free_purgeable)}"
+    return f"{text} · {human(free).strip()} free{of}"
+
+
+def purgeable_text(shown: str, free: int, free_purgeable: int) -> str:
+    """'(free: 4.7G, purgeable: 26.4G, total: 31.1G)', with `shown` as the free part.
+    Purgeable is what the free + purgeable reading adds to the free space, never below 0."""
+    purgeable = max(0, free_purgeable - free)
+    return (
+        f"(free: {shown}, purgeable: {human(purgeable).strip()}, "
+        f"total: {human(free + purgeable).strip()})"
+    )
 
 
 def _c(verdict: str, text: str, color: bool) -> str:

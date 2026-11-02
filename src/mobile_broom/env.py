@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import os
 import re
@@ -15,6 +17,49 @@ SIMCTL_DENIED = re.compile(
     r"Connection invalid|connection became invalid|Connection refused|Operation not permitted|sandbox|not permitted|CoreSimulatorService",
     re.IGNORECASE,
 )
+
+
+def _free_purgeable(path: Path) -> int | None:
+    """Free plus purgeable bytes of the volume that holds `path`, the figure Finder shows as
+    available: CoreFoundation's kCFURLVolumeAvailableCapacityForImportantUsageKey. None off
+    macOS or when the volume does not report it."""
+    lib = ctypes.util.find_library("CoreFoundation")
+    if lib is None:
+        return None
+    try:
+        cf = ctypes.CDLL(lib)
+        key = ctypes.c_void_p.in_dll(cf, "kCFURLVolumeAvailableCapacityForImportantUsageKey")
+    except (OSError, ValueError):
+        return None
+    vp = ctypes.c_void_p
+    cf.CFURLCreateFromFileSystemRepresentation.restype = vp
+    cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
+        vp,
+        ctypes.c_char_p,
+        ctypes.c_long,
+        ctypes.c_bool,
+    ]
+    cf.CFURLCopyResourcePropertyForKey.restype = ctypes.c_bool
+    cf.CFURLCopyResourcePropertyForKey.argtypes = [vp, vp, ctypes.POINTER(vp), vp]
+    cf.CFNumberGetValue.restype = ctypes.c_bool
+    cf.CFNumberGetValue.argtypes = [vp, ctypes.c_long, vp]
+    cf.CFRelease.argtypes = [vp]
+    raw = os.fsencode(path)
+    url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), True)
+    if not url:
+        return None
+    try:
+        num = vp()
+        if not cf.CFURLCopyResourcePropertyForKey(url, key, ctypes.byref(num), None) or not num:
+            return None
+        try:
+            out = ctypes.c_int64()
+            ok = cf.CFNumberGetValue(num, 4, ctypes.byref(out))  # 4: kCFNumberSInt64Type
+            return out.value if ok else None
+        finally:
+            cf.CFRelease(num)
+    finally:
+        cf.CFRelease(url)
 
 
 class Env:
@@ -120,12 +165,16 @@ class Env:
     # -- disk ------------------------------------------------------------
     def disk_usage(self) -> tuple[int, int] | None:
         """(free, total) bytes of the volume that holds HOME, from statvfs; None if unreadable.
-        On APFS free leaves out purgeable space, which Finder counts as available."""
+        On APFS free leaves out purgeable space; disk_free_purgeable() counts it."""
         try:
             u = shutil.disk_usage(self.home)
         except OSError:
             return None
         return (u.free, u.total) if u.total else None
+
+    def disk_free_purgeable(self) -> int | None:
+        """Free plus purgeable bytes of the volume that holds HOME; None if unreadable."""
+        return _free_purgeable(self.home)
 
     # -- simctl ----------------------------------------------------------
     def simctl_ok(self) -> bool:

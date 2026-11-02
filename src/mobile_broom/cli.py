@@ -106,7 +106,7 @@ def cmd_audit(args, env: Env, cfg: Config) -> int:
     else:
         render(findings)
         if usage := env.disk_usage():
-            print(f"disk  {disk_text(usage)}")
+            print(f"disk  {disk_text(usage, free_purgeable=env.disk_free_purgeable())}")
         if env.simctl_error:
             print(f"\nwarning: {env.simctl_error}", file=sys.stderr)
     return 0
