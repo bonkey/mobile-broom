@@ -1055,19 +1055,44 @@ def test_free_space_projects_the_marked_size_capped_at_the_used_space():
     assert tui._free((400 * G, 1000 * G), 700 * G) == "400.0G free → 1.0T"
 
 
+def test_free_space_with_purgeable_shows_free_purgeable_and_their_total():
+    """The marked projection stays on the free part. A free + purgeable reading below the
+    free space counts as no purgeable space."""
+    assert tui._free((4 * G, 245 * G), 0, 31 * G) == "(free: 4.0G, purgeable: 27.0G, total: 31.0G)"
+    assert (
+        tui._free((4 * G, 245 * G), 5 * G, 31 * G)
+        == "(free: 4.0G → 9.0G, purgeable: 27.0G, total: 31.0G)"
+    )
+    assert tui._free((4 * G, 245 * G), 0, 3 * G) == "(free: 4.0G, purgeable: 0B, total: 4.0G)"
+
+
 class DiskEnv:
     """Hands out one (free, total) reading per call; an extra call fails the scan."""
 
     simctl_error = None
 
-    def __init__(self, *readings):
+    def __init__(self, *readings, free_purgeable=None):
         self.readings = list(readings)
+        self.free_purgeable = free_purgeable
 
     def forget(self):
         pass
 
     def disk_usage(self):
         return self.readings.pop(0)
+
+    def disk_free_purgeable(self):
+        return self.free_purgeable
+
+
+def test_purgeable_space_is_read_with_the_disk_and_shown_on_the_all_row(browser):
+    b, scr = browser
+    b.env = DiskEnv((4 * G, 245 * G), free_purgeable=31 * G)
+    b.read_disk()
+    b.draw(b.rows())
+    assert scr.lines[0].startswith(
+        "> all  15B total · dead 10B · (free: 4.0G, purgeable: 27.0G, total: 31.0G)  "
+    )
 
 
 def test_disk_is_read_at_startup_when_a_scan_finishes_and_after_act(browser, monkeypatch):

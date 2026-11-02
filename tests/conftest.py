@@ -31,6 +31,7 @@ class FakeEnv(Env):
         self.calls: list[list[str]] = []
         self.tools: dict[str, str] = {}
         self.disk: tuple[int, int] | None = (400_000_000_000, 1_000_000_000_000)  # (free, total)
+        self.free_purgeable: int | None = None
 
     def respond(self, argv: list[str], stdout="", returncode=0, stderr=""):
         if not isinstance(stdout, str):
@@ -49,6 +50,9 @@ class FakeEnv(Env):
 
     def disk_usage(self):
         return self.disk
+
+    def disk_free_purgeable(self):
+        return self.free_purgeable
 
 
 @pytest.fixture

@@ -89,6 +89,26 @@ def test_audit_nothing_found_still_shows_disk_free(env, cfg, home, capsys):
     )
 
 
+def test_audit_shows_free_purgeable_and_their_total(env, cfg, home, capsys):
+    env.free_purgeable = 430_000_000_000
+    rc = cli.main(["audit", "avd"], env=env)
+    assert rc == 0 and capsys.readouterr().out == (
+        "nothing found\ndisk  60% used of 1.0T (free: 400.0G, purgeable: 30.0G, total: 430.0G)\n"
+    )
+
+
+def test_env_disk_free_purgeable_reads_the_home_volume(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(env_mod, "_free_purgeable", lambda p: seen.append(p) or 31)
+    assert env_mod.Env(home=tmp_path).disk_free_purgeable() == 31
+    assert seen == [tmp_path]
+
+
+def test_free_purgeable_is_none_without_corefoundation(tmp_path, monkeypatch):
+    monkeypatch.setattr(env_mod.ctypes.util, "find_library", lambda name: None)
+    assert env_mod._free_purgeable(tmp_path) is None
+
+
 def test_env_disk_usage_reads_the_home_volume(tmp_path, monkeypatch):
     seen = []
 
