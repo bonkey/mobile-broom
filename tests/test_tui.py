@@ -1194,6 +1194,7 @@ curses.wrapper(main)
 
 
 @pytest.mark.skipif(shutil.which("tic") is None, reason="needs tic to compile a terminfo entry")
+@pytest.mark.skipif(sys.platform != "darwin", reason="guards macOS ncurses 6.0's rep bug")
 def test_screen_and_keys_box_reach_a_rep_terminal_as_valid_utf8(tmp_path):
     """The real curses, in a pty, with a terminfo entry that has `rep` (as Ghostty's
     xterm-ghostty does). The bytes must decode as UTF-8, and `rep` must follow only ASCII."""
