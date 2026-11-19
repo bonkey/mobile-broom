@@ -95,6 +95,10 @@ class Env:
         return Path(root) if root else Path("/Library/Developer/CoreSimulator/Images/images.plist")
 
     @property
+    def volumes(self) -> Path:
+        return Path(self.environ.get("MOBILE_BROOM_VOLUMES") or "/Volumes")
+
+    @property
     def android_home(self) -> Path:
         return Path(
             self.environ.get("ANDROID_HOME")

@@ -25,7 +25,13 @@ class FakeEnv(Env):
 
     def __init__(self, home: Path, environ: dict | None = None):
         super().__init__(
-            home=home, environ={"HOME": str(home), "PATH": "/usr/bin:/bin", **(environ or {})}
+            home=home,
+            environ={
+                "HOME": str(home),
+                "PATH": "/usr/bin:/bin",
+                "MOBILE_BROOM_VOLUMES": str(home.parent / "Volumes"),
+                **(environ or {}),
+            },
         )
         self.responses: dict[tuple, subprocess.CompletedProcess] = {}
         self.calls: list[list[str]] = []

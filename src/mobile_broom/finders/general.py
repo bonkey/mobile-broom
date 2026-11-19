@@ -1,6 +1,7 @@
 """General dev caches. Package-manager caches (npm, npx, pnpm, yarn, bun, Homebrew) are pure
 re-downloadable caches → shared + delete. Docker/colima disks are VM images, not caches →
-report-only. mise / JetBrains: older versions → stale."""
+report-only. mise / JetBrains: older versions → stale. Trash entries are already thrown
+away → shared + delete."""
 
 from __future__ import annotations
 
@@ -217,3 +218,59 @@ def find_jetbrains(env, cfg):
                     action=action,
                     locked=locked,
                 )
+
+
+def _trashes(env):
+    """(folder, bucket) for the user's Trash on every mounted volume: `~/.Trash` on the home
+    volume, `.Trashes/<uid>` on the others. A symlinked volume (`Macintosh HD -> /`) is the
+    boot volume, which `~/.Trash` already covers."""
+    yield env.p(".Trash"), "~/.Trash"
+    uid = str(os.getuid())
+    for vol in listdir(env.volumes):
+        root = env.volumes / vol
+        if not root.is_symlink():
+            trash = root / ".Trashes" / uid
+            yield trash, str(trash)
+
+
+@register("trash")
+def find_trash(env, cfg):
+    """One finding per Trash entry, so a root-owned app gets its own printed `sudo rm` and an
+    entry that cannot be deleted does not hold up the rest."""
+    for trash, bucket in _trashes(env):
+        try:
+            names = sorted(os.listdir(trash))
+        except PermissionError:
+            yield Finding(
+                category="trash",
+                group="general",
+                label=bucket,
+                paths=[str(trash)],
+                evidence="macOS denied listing this Trash",
+                verdict="review",
+                locked="give your terminal Full Disk Access, or empty the Trash in Finder",
+            )
+            continue
+        except OSError:
+            continue
+        for name in names:
+            if name == ".DS_Store":  # Finder's own file
+                continue
+            path = trash / name
+            # Moving an entry into the Trash is a rename, which sets its ctime. A later chmod
+            # or xattr change moves it too, so the date is approximate.
+            try:
+                trashed = os.lstat(path).st_ctime
+            except OSError:
+                continue
+            yield Finding(
+                category="trash",
+                group="general",
+                label=f"{name} · {bucket}",
+                paths=[str(path)],
+                evidence=f"in the Trash since about {when(trashed)}",
+                last=trashed,
+                verdict="shared",
+                action=Action(kind="remove", path=str(path), in_trash=True),
+                bucket=bucket,
+            )
