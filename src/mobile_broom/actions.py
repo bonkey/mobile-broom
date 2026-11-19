@@ -127,6 +127,11 @@ def execute(
             note = f"{shlex.join(a.argv or [])}   (no safe actor; run yourself)"
             results += report(fs, MANUAL, note, False)
             continue
+        if a.kind == "remove" and trash and a.in_trash:
+            results += report(
+                fs, MANUAL, "already in the Trash; delete it to free the space", False
+            )
+            continue
         if dry_run:
             if a.kind == "argv" and a.dry_run_argv:
                 r = runner(a.dry_run_argv)

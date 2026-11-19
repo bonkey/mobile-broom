@@ -179,3 +179,17 @@ def test_execute_reports_each_finding_and_calls_progress(tmp_path):
         ("dd", actions.OK),
     ]
     assert [r.status for r in res] == [actions.OK] * 3
+
+
+def test_trash_mode_leaves_entries_that_are_already_in_a_trash(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOBILE_BROOM_TRASH", str(tmp_path / "trash"))
+    entry = mkfile(tmp_path / ".Trash" / "old" / "f", size=1).parent
+    todo = [f("old", Action(kind="remove", path=str(entry), in_trash=True))]
+    for dry_run in (True, False):
+        out = io.StringIO()
+        res = actions.execute(todo, dry_run=dry_run, trash=True, out=out)
+        assert [(r.status, r.ok) for r in res] == [(actions.MANUAL, False)]
+        assert "already in the Trash" in out.getvalue()
+        assert entry.exists() and not (tmp_path / "trash").exists()
+    res = actions.execute(todo, trash=False, out=io.StringIO())
+    assert res[0].status == actions.OK and not entry.exists()

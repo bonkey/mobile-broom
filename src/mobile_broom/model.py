@@ -36,7 +36,7 @@ GROUPS: dict[str, list[str]] = {
     ],
     "worktrees": ["worktree-artifacts", "worktree-simulators", "orphan-derived-data"],
     "paseo": ["paseo-artifacts"],
-    "general": ["npm", "docker", "homebrew", "mise", "jetbrains"],
+    "general": ["npm", "docker", "homebrew", "mise", "jetbrains", "trash"],
 }
 CATEGORY_GROUP = {c: g for g, cs in GROUPS.items() for c in cs}
 
@@ -48,6 +48,7 @@ class Action:
     kind: "argv"   run a command (official CLI first: simctl, avdmanager, sdkmanager, mise)
           "remove" delete a user-owned path (moved to ~/.Trash instead with --trash)
           "print"  no safe actor available (root-owned, no CLI): print the command and stop
+    in_trash: the path already sits in a Trash, so --trash leaves it where it is
     """
 
     kind: str
@@ -55,6 +56,7 @@ class Action:
     path: str | None = None
     dry_run_argv: list[str] | None = None
     extra_paths: list[str] | None = None
+    in_trash: bool = False
 
     def describe(self) -> str:
         if self.kind == "remove":

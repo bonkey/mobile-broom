@@ -54,6 +54,7 @@ mobile-broom clean derived-data       # act on dead findings, with confirm
 mobile-broom clean android --yes      # skip confirm (scripts)
 mobile-broom clean ios --stale        # also act on stale; --shared for shared caches
 mobile-broom clean ios --trash        # move paths to ~/.Trash instead of deleting
+mobile-broom clean trash --shared    # empty the Trash on every mounted volume
 mobile-broom config --edit            # ~/.config/mobile-broom/config.json
 ```
 
@@ -69,7 +70,7 @@ finding and the space on the disk that holds your home folder
 (`(free: 4.7G, purgeable: 26.4G, total: 31.1G)`, or `444.0G free` when macOS gives no purgeable
 figure). While anything is marked the free part adds `→ <free + marked>`. That is a ceiling,
 not a promise: marked sizes are candidates, and `t` (move to `~/.Trash`) frees nothing until
-the Trash is emptied. The disk
+the Trash is emptied (the `trash` category under `general` does that). The disk
 is read at startup, when a scan finishes and after `d`. At its right end are the scan progress
 (`⠋ collecting 7/27 · sizing 12/40`), the sort and the `?` chip. `?` opens a box that lists
 every key (marking keys in yellow, `d` in red) and what the marks mean. Every group and category
@@ -134,6 +135,7 @@ snapshots, caches and evictable iCloud files that macOS deletes when space runs 
 | `orphan-derived-data` | DerivedData keyed to a vanished worktree path — report-only cross-reference (act via `derived-data`) | — |
 | `npm` `homebrew` | `~/.npm/_cacache`, `_npx`, pnpm store/cache, yarn, `~/.bun/install/cache`, Homebrew cache + logs — pure download caches → shared | delete |
 | `docker` `mise` `jetbrains` | colima/Docker/OrbStack disks (VM images → locked), mise (older versions → stale), JetBrains (older IDE builds → stale) | `mise uninstall`, delete |
+| `trash` | every entry in `~/.Trash` and in `.Trashes/<your uid>` on each other mounted volume, one heading per Trash → shared, so `clean --shared` empties it. Date = the entry's ctime, about when it was trashed. A Trash macOS will not list (no Full Disk Access) → locked, never reported as empty. | delete (root-owned entries, such as trashed App Store apps: `sudo rm -rf` printed) |
 
 ## Safety
 
@@ -141,7 +143,7 @@ snapshots, caches and evictable iCloud files that macOS deletes when space runs 
 - Official CLI first — runtimes always go through `simctl`; AVDs/system images use
   `avdmanager`/`sdkmanager` when installed and fall back to removing the exact dirs they would.
 - No sudo. Root-owned paths get the command printed instead (shell-quoted, copy-paste safe).
-- Deletes by default; `--trash` (or `t` in the TUI confirm) moves to `~/.Trash` instead.
+- Deletes by default; `--trash` (or `t` in the TUI confirm) moves to `~/.Trash` instead. A `trash` entry is already in a Trash, so `--trash` leaves it there (`manual`).
 - Booted simulators (until you shut one down from the TUI), their runtimes, worktrees themselves (only git-ignored artifact dirs inside them) and `protected` globs from config are never acted on.
 - Everything without an action says why (`locked`), so "not removable" is never a mystery.
 - `--dry-run` on every `clean`; for runtimes it runs `simctl runtime delete --dry-run` and shows simctl's own answer.
